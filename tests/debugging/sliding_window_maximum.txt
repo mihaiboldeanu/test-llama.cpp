@@ -1,0 +1,18 @@
+Fix this code:
+
+Return the maximum for each sliding window of size k.
+
+```python
+def max_sliding_window(nums, k):
+    result = []
+    for i in range(len(nums) - k):
+        result.append(max(nums[i:i+k]))
+    return result
+```
+
+Rules:
+- If k == 1, return nums unchanged
+- If nums is empty, return []
+- Assume 1 <= k <= len(nums) when nums is non-empty
+
+Only return the code.

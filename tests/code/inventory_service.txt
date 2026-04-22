@@ -1,0 +1,51 @@
+Build a single-file FastAPI app implementing an in-memory inventory system.
+
+Requirements:
+- Use FastAPI
+- Store items in memory using a dict
+
+Each item:
+{
+  "id": str,
+  "name": str,
+  "stock": int,
+  "reserved": int
+}
+
+When an item is created, initialize `reserved` to 0.
+
+Routes:
+
+POST /items
+- body: {id, name, stock}
+- create item
+- reject duplicate id with HTTP 400
+
+GET /items/{id}
+- return item
+- 404 if missing
+
+POST /reserve/{id}
+- body: {amount}
+- increase reserved
+- amount must be a positive integer
+- cannot exceed available stock (stock - reserved)
+- else 400
+
+POST /release/{id}
+- body: {amount}
+- decrease reserved
+- amount must be a positive integer
+- cannot go below 0
+- else 400
+
+GET /items
+- return all items sorted by id
+
+Rules:
+- all responses JSON
+- proper HTTP status codes
+- no database
+- single file
+
+Return only Python code.

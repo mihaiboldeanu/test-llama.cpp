@@ -1,0 +1,24 @@
+Fix this code:
+
+Insert a new interval into a sorted, non-overlapping interval list and merge if needed.
+
+```python
+def insert_interval(intervals, new_interval):
+    result = []
+    start, end = new_interval
+
+    for s, e in intervals:
+        if e < start:
+            result.append([s, e])
+        elif s > end:
+            result.append([start, end])
+            result.append([s, e])
+        else:
+            start = min(start, s)
+            end = max(end, e)
+
+    result.append([start, end])
+    return result
+```
+
+Only return the code.

@@ -1,0 +1,16 @@
+Find all starting indices of substrings formed by concatenating every word exactly once.
+
+def find_substring(s: str, words: list[str]) -> list[int]:
+
+Requirements:
+- All words have the same length
+- Each word in `words` must appear exactly as many times as given
+- Return indices in ascending order
+- Aim for an efficient sliding-window solution
+
+Examples:
+find_substring("barfoothefoobarman", ["foo", "bar"]) -> [0, 9]
+find_substring("wordgoodgoodgoodbestword", ["word", "good", "best", "word"]) -> []
+find_substring("barfoofoobarthefoobarman", ["bar", "foo", "the"]) -> [6, 9, 12]
+
+Return only Python code, no explanation.

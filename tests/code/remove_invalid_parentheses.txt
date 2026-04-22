@@ -1,0 +1,16 @@
+Remove the minimum number of invalid parentheses and return all valid results.
+
+def remove_invalid_parentheses(s: str) -> list[str]:
+
+Requirements:
+- Remove the fewest parentheses possible
+- Return every distinct valid string obtainable with the minimum removals
+- Preserve the relative order of all non-removed characters
+- The result may be returned in any order
+
+Examples:
+remove_invalid_parentheses("()())()") -> ["(())()", "()()()"]
+remove_invalid_parentheses("(a)())()") -> ["(a())()", "(a)()()"]
+remove_invalid_parentheses(")(") -> [""]
+
+Return only Python code, no explanation.

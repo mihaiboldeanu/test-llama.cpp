@@ -1,0 +1,40 @@
+Build a single-file FastAPI app implementing an in-memory job queue.
+
+Each job has:
+{
+  "id": str,
+  "status": "queued" | "running" | "done",
+  "payload": str
+}
+
+Routes:
+
+POST /jobs
+- body: {id, payload}
+- create with status="queued"
+- reject duplicate id with 400
+
+POST /jobs/{id}/start
+- allowed only if status == "queued"
+- change to "running"
+- else 400
+
+POST /jobs/{id}/finish
+- allowed only if status == "running"
+- change to "done"
+- else 400
+
+GET /jobs/{id}
+- return job
+- 404 if missing
+
+GET /jobs
+- return all jobs sorted by id
+
+Rules:
+- JSON responses
+- in-memory only
+- single file
+- proper HTTP status codes
+
+Return only Python code.

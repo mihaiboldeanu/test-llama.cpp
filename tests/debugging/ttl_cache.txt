@@ -1,0 +1,33 @@
+Fix this code.
+
+Implement a TTL cache where keys expire at `now >= expiry_time`.
+
+```python
+class TTLCache:
+    def __init__(self):
+        self.data = {}
+
+    def put(self, key, value, ttl, now):
+        self.data[key] = (value, now + ttl)
+
+    def get(self, key, now):
+        if key not in self.data:
+            return -1
+        value, expiry = self.data[key]
+        if now > expiry:
+            del self.data[key]
+            return -1
+        return value
+
+    def cleanup(self, now):
+        for key, (_, expiry) in self.data.items():
+            if now > expiry:
+                del self.data[key]
+```
+
+Requirements:
+- expired means `now >= expiry_time`
+- `cleanup` must not crash
+- keep API unchanged
+
+Return only Python code.

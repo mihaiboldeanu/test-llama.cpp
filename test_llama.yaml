@@ -1,0 +1,46 @@
+# test-llama configuration
+
+# Paths
+model_dir: ~/ollama
+llama_cpp_dir: ~/Projects/llama.cpp
+turbo_dir: ~/Projects/llama-cpp-turboquant
+cuda_root: /opt/cuda-13.1
+
+# Build settings
+build_jobs: 8
+threads: 8
+threads_batch: 16
+
+# VRAM settings
+vram_total_gb: 24
+vram_headroom_gb: 2
+fit_target_mib: 1024
+batch_size: 2048
+ubatch_size: 2048
+temp: 0.6
+top_k: 20
+top_p: 0.95
+min_p: 0.0
+repeat_penalty: 1.0
+presence_penalty: 0.0
+seed: null
+chat_template_kwargs: '{"preserver_thinking": true}'
+
+# Server settings
+default_port: 11435
+port_range_end: 11500
+
+# Model families - just max_ctx
+families:
+  qwen:
+    max_ctx: 262144
+    preferred_ctx: 65536
+
+  gemma:
+    max_ctx: 131072
+
+  gemma31b:
+    max_ctx: 262144
+
+  bonsai:
+    max_ctx: 65536

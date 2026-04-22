@@ -1,0 +1,32 @@
+Fix this code.
+
+Repeatedly crush horizontal or vertical groups of 3+ equal non-zero values, apply gravity, and return the stable board.
+
+```python
+def candy_crush(board):
+    rows, cols = len(board), len(board[0])
+    changed = True
+
+    while changed:
+        changed = False
+
+        for r in range(rows):
+            for c in range(cols - 2):
+                v = abs(board[r][c])
+                if v and v == abs(board[r][c+1]) and v == abs(board[r][c+2]):
+                    board[r][c] = board[r][c+1] = board[r][c+2] = 0
+                    changed = True
+
+        for c in range(cols):
+            write = rows - 1
+            for r in range(rows - 1, -1, -1):
+                if board[r][c] > 0:
+                    board[write][c] = board[r][c]
+                    write -= 1
+            for r in range(write, -1, -1):
+                board[r][c] = 0
+
+    return board
+```
+
+Only return the code.

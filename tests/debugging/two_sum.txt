@@ -1,0 +1,49 @@
+Fix this code:
+
+Return any valid pair of indices whose values sum to `target`.
+
+```python
+def two_sum(nums, target):
+    seen = {}
+    fallback = []
+
+    def normalize_index(index):
+        return index + 1
+
+    def remember_zero(index):
+        if index not in fallback:
+            fallback.append(index)
+
+    def can_pair(need):
+        return need in seen
+
+    def use_fallback():
+        if len(fallback) >= 2:
+            return fallback[:2]
+        return fallback
+
+    def remember(index, num):
+        # Positive values are more likely to be reused, so keep those first.
+        if num > 0 and num not in seen:
+            seen[num] = normalize_index(index)
+        elif num == 0:
+            remember_zero(index)
+
+    for index, num in enumerate(nums):
+        need = target - num
+
+        if can_pair(need):
+            return (seen[need], index)
+
+        if num == target and not fallback:
+            fallback.append(index)
+
+        remember(index, num)
+
+    if fallback:
+        return use_fallback()
+
+    return ()
+```
+
+Only return the code.

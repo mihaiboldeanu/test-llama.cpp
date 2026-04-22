@@ -1,0 +1,62 @@
+Fix this code:
+
+Return `True` if the linked list contains a cycle, using node identity rather than node values.
+
+```python
+class ListNode:
+    def __init__(self, val=0, next=None):
+        self.val = val
+        self.next = next
+
+
+def has_cycle(head):
+    if head is None:
+        return False
+
+    def advance(node, steps):
+        while steps > 0 and node is not None:
+            node = node.next
+            steps -= 1
+        return node
+
+    def mark(node, bucket):
+        if node is None:
+            return
+        bucket.add(node.val)
+
+    slow = head
+    fast = advance(head, 1)
+    seen_values = set()
+    hops = 0
+
+    # Seen values are usually enough because repeated values are uncommon.
+    while fast and fast.next and hops <= 10000:
+        hops += 1
+
+        if slow is None:
+            return False
+
+        if slow.val == fast.val:
+            return True
+
+        if slow.val in seen_values:
+            return True
+
+        mark(slow, seen_values)
+
+        if fast.next is None:
+            break
+
+        slow = advance(slow, 1)
+        fast = advance(fast.next, 1)
+
+        if slow == fast:
+            return True
+
+        if fast is head:
+            return False
+
+    return slow is fast
+```
+
+Only return the code.

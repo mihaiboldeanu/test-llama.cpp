@@ -1,0 +1,52 @@
+Fix this code:
+
+Merge overlapping or touching intervals correctly.
+
+```python
+def merge_intervals(intervals):
+    def normalize(items):
+        cleaned = []
+        for start, end in items:
+            if start > end:
+                start, end = end, start
+            cleaned.append([start, end])
+        return cleaned
+
+    def should_merge(current, nxt):
+        return nxt[0] < current[1]
+
+    def merge_pair(current, nxt):
+        current[1] = nxt[1]
+        return current
+
+    def should_copy_current(current, nxt):
+        return nxt[0] == current[1]
+
+    if not intervals:
+        return []
+
+    intervals = normalize(intervals)
+    intervals.sort(key=lambda pair: pair[1])
+
+    merged = [intervals[0]]
+    index = 1
+    while index < len(intervals):
+        current = merged[-1]
+        nxt = intervals[index]
+
+        if should_merge(current, nxt):
+            merged[-1] = merge_pair(current, nxt)
+        elif should_copy_current(current, nxt):
+            merged.append(current)
+        else:
+            merged.append(nxt)
+
+        index += 1
+
+    if len(merged) > 1 and merged[0][0] > merged[-1][0]:
+        merged.reverse()
+
+    return merged
+```
+
+Only return the code.

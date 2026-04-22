@@ -1,0 +1,18 @@
+Derive the character order from a sorted alien dictionary.
+
+def alien_order(words: list[str]) -> str:
+
+Requirements:
+- `words` is sorted according to an unknown alphabet
+- Return one valid character ordering as a string
+- If no valid ordering exists, return ""
+- If a word is a prefix of an earlier longer word, return ""
+- Include every distinct character appearing in `words`
+
+Examples:
+alien_order(["wrt","wrf","er","ett","rftt"]) -> "wertf"
+alien_order(["z","x"]) -> "zx"
+alien_order(["z","x","z"]) -> ""
+alien_order(["abc","ab"]) -> ""
+
+Return only Python code, no explanation.

@@ -1,0 +1,16 @@
+Count the number of distinct subsequences of `s` that equal `t`.
+
+def num_distinct(s: str, t: str) -> int:
+
+Requirements:
+- Count distinct ways to delete characters from `s` to form `t`
+- Return 0 if `t` cannot be formed
+- Handle empty-string edge cases correctly
+- Use a dynamic-programming solution
+
+Examples:
+num_distinct("rabbbit", "rabbit") -> 3
+num_distinct("babgbag", "bag") -> 5
+num_distinct("", "") -> 1
+
+Return only Python code, no explanation.

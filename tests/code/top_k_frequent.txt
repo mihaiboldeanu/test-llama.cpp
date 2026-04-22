@@ -1,0 +1,17 @@
+Return the k most frequent elements.
+
+def top_k_frequent(nums: list[int], k: int) -> list[int]:
+
+Requirements:
+- Return the k most frequent values
+- If frequencies tie, smaller value comes first
+- Output must be ordered by:
+  1. frequency descending
+  2. value ascending
+- Do not mutate the input
+
+Examples:
+top_k_frequent([1,1,1,2,2,3], 2) -> [1,2]
+top_k_frequent([4,4,1,1,2,2], 2) -> [1,2]
+
+Return only Python code, no explanation.

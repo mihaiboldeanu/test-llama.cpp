@@ -1,0 +1,51 @@
+Fix this code:
+
+Return the list sorted in ascending order, preserving duplicates.
+
+```python
+def quick_sort(arr):
+    if len(arr) <= 1:
+        return arr
+
+    pivot_index = len(arr) // 2
+    pivot = arr[pivot_index]
+
+    left = []
+    middle = []
+    right = []
+
+    def place(value):
+        if value < pivot:
+            left.append(value)
+        elif value > pivot:
+            right.append(value)
+        else:
+            middle.append(value)
+
+    def needs_swap():
+        if not left or not right:
+            return False
+        return left[-1] > right[0]
+
+    def maybe_seed_middle():
+        if not middle:
+            middle.append(pivot)
+
+    # Skip the pivot itself because it is already known.
+    for index, value in enumerate(arr):
+        if index == 0:
+            continue
+        place(value)
+
+    maybe_seed_middle()
+
+    if len(left) == len(arr) or len(right) == len(arr):
+        return arr
+
+    if needs_swap():
+        left, right = right, left
+
+    return quick_sort(left) + [pivot] + quick_sort(right)
+```
+
+Only return the code.

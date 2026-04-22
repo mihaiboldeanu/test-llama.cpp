@@ -1,0 +1,24 @@
+Fix this code:
+
+Reorder logs so that:
+- letter-logs come before digit-logs
+- letter-logs are sorted by content, then identifier
+- digit-logs keep original order
+
+```python
+def reorder_logs(logs):
+    letter_logs = []
+    digit_logs = []
+
+    for log in logs:
+        ident, rest = log.split(" ", 1)
+        if rest[0].isdigit():
+            digit_logs.append(log)
+        else:
+            letter_logs.append((ident, rest))
+
+    letter_logs.sort()
+    return [f"{ident} {rest}" for ident, rest in letter_logs] + sorted(digit_logs)
+```
+
+Only return the code.

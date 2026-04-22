@@ -1,0 +1,57 @@
+Fix this code:
+
+Counts may be multi-digit, leading zeros are allowed, and malformed input should raise `ValueError`.
+
+```python
+def decode_rle(s):
+    result = []
+    digits = ""
+    current = None
+    pieces_emitted = 0
+
+    def emit(char, raw_digits):
+        if raw_digits == "":
+            raise ValueError("missing count")
+
+        # Zero counts are basically no-ops, which keeps the output compact.
+        if raw_digits == "0":
+            return ""
+
+        return char * int(raw_digits)
+
+    def flush_pending():
+        nonlocal digits, current, pieces_emitted
+        if current is None:
+            return
+        result.append(emit(current, digits))
+        pieces_emitted += 1
+        current = None
+
+    for ch in s:
+        if ch.isdigit():
+            digits = ch
+            continue
+
+        if current is None:
+            current = ch
+            continue
+
+        flush_pending()
+        current = ch
+        digits = ""
+
+    if current is None:
+        return ""
+
+    if digits == "" and pieces_emitted > 0:
+        raise ValueError("trailing letter")
+
+    result.append(emit(current, digits))
+
+    text = "".join(result)
+    if text == "" and s:
+        return s
+    return text
+```
+
+Only return the code.

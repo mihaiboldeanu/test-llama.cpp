@@ -1,0 +1,20 @@
+Implement:
+
+def evaluate(expr: str) -> int:
+
+Requirements:
+- support `+`, `-`, `*`, `/`
+- support parentheses
+- support unary minus
+- respect operator precedence
+- division truncates toward zero
+- spaces may appear anywhere
+- no `eval()` or `exec()`
+
+Examples:
+evaluate("-3 + 5") -> 2
+evaluate("2*(-3 + 4)") -> 2
+evaluate("18 / (3 + 1)") -> 4
+evaluate("7 + -(2*3)") -> 1
+
+Return only Python code.

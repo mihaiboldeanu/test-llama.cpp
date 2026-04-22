@@ -1,0 +1,34 @@
+Fix this code.
+
+Return the skyline formed by buildings.
+Each building is [left, right, height].
+Return key points [x, height].
+
+```python
+import heapq
+
+def get_skyline(buildings):
+    events = []
+    for l, r, h in buildings:
+        events.append((l, h, r))
+        events.append((r, 0, 0))
+    events.sort()
+
+    result = []
+    heap = [(0, float('inf'))]
+
+    for x, h, r in events:
+        while heap and heap[0][1] < x:
+            heapq.heappop(heap)
+
+        if h > 0:
+            heapq.heappush(heap, (-h, r))
+
+        current = -heap[0][0]
+        if not result or result[-1][1] != current:
+            result.append([x, current])
+
+    return result
+```
+
+Only return the code.

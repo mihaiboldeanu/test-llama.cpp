@@ -1,0 +1,32 @@
+Fix this code.
+
+Goal:
+Group events into sessions per user.
+A new session starts if the time gap is greater than 10.
+An exact gap of 10 stays in the same session.
+
+Return:
+user -> list of sessions
+each session is a list of event ids
+
+```python
+def group_sessions(events):
+    sessions = {}
+    last_time = {}
+
+    for user, event_id, timestamp in events:
+        if user not in sessions:
+            sessions[user] = []
+            sessions[user].append([])
+
+        if user in last_time:
+            if timestamp - last_time[user] >= 10:
+                sessions[user].append([])
+
+        sessions[user][-1].append(event_id)
+        last_time[user] = timestamp
+
+    return sessions
+```
+
+Return only code.

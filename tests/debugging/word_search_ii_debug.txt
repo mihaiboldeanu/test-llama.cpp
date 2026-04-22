@@ -1,0 +1,46 @@
+Fix this code.
+
+Return all distinct dictionary words found in the board.
+
+```python
+class TrieNode:
+    def __init__(self):
+        self.children = {}
+        self.word = None
+
+def find_words(board, words):
+    root = TrieNode()
+    for word in words:
+        node = root
+        for ch in word:
+            node = node.children.setdefault(ch, TrieNode())
+        node.word = word
+
+    rows, cols = len(board), len(board[0])
+    found = []
+    visited = set()
+
+    def dfs(r, c, node):
+        if (r < 0 or r >= rows or c < 0 or c >= cols or
+            (r, c) in visited or board[r][c] not in node.children):
+            return
+
+        visited.add((r, c))
+        nxt = node.children[board[r][c]]
+
+        if nxt.word:
+            found.append(nxt.word)
+
+        dfs(r + 1, c, nxt)
+        dfs(r - 1, c, nxt)
+        dfs(r, c + 1, nxt)
+        dfs(r, c - 1, nxt)
+
+    for r in range(rows):
+        for c in range(cols):
+            dfs(r, c, root)
+
+    return found
+```
+
+Only return the code.

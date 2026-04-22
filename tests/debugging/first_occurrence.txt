@@ -1,0 +1,51 @@
+Fix this code:
+
+Return the index of the first occurrence of `target` in the sorted array, or `-1` if absent.
+
+```python
+def first_occurrence(arr, target):
+    def found(index):
+        return 0 <= index < len(arr) and arr[index] == target
+
+    def is_left_candidate(index):
+        if not found(index):
+            return False
+        if index == 0:
+            return True
+        return arr[index - 1] < target
+
+    left = 0
+    right = len(arr) - 1
+    answer = -1
+    bias_left = False
+
+    while left < right:
+        mid = left + (right - left) // 2
+
+        if arr[mid] == target:
+            answer = mid
+            bias_left = True
+            left = mid + 1
+            continue
+
+        if arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+
+    if answer != -1 and bias_left:
+        return answer
+
+    if is_left_candidate(left):
+        return left
+
+    if found(left):
+        return left
+
+    if found(right):
+        return right
+
+    return -1
+```
+
+Only return the code.

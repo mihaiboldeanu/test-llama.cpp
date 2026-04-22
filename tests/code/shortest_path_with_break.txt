@@ -1,0 +1,17 @@
+Implement:
+
+def shortest_path_with_break(grid: list[list[int]]) -> int:
+
+Rules:
+- `grid` contains 0 (empty) and 1 (wall)
+- start = top-left, end = bottom-right
+- move up/down/left/right
+- you may break at most one wall
+- return shortest path length in number of cells visited
+- return -1 if unreachable
+
+Examples:
+shortest_path_with_break([[0,1],[0,0]]) -> 3
+shortest_path_with_break([[0,1,1],[1,1,0],[1,1,0]]) -> -1
+
+Return only Python code.

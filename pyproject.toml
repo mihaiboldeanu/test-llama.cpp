@@ -1,0 +1,15 @@
+# Ruff formatter config for VSCode
+
+root = true
+
+[lint]
+select = ["E", "F", "W", "I", "N", "UP", "YTT", "ANN", "ASYNC", "BAL", "BOS", "BT", "C4", "C90", "COM", "DTZ", "T10", "DJ", "EM", "ERA", "EXE", "F541", "F90", "FBT", "ICN", "G", "INP", "PIE", "T20", "PKG", "P", "Q", "RSE", "RUF", "SIM", "TID", "TCH", "ARG", "PTH", "ERA001", "PL", "N999", "ANN001", "ANN204", "ANN401", "PLR0913", "PLR2004", "S", "TCH001", "TCH002"]
+ignore = ["E501", "ANN101", "ANN102", "ANN401", "PLR0913", "S101", "FBT001", "FBT002", "N999", "ERA001", "PLR2004", "RUF001"]
+
+[lint.isort]
+force-single-line = false
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
