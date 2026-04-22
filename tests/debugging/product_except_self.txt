@@ -1,0 +1,18 @@
+Fix this code:
+
+Return an array where each element is the product of all other elements.
+
+```python
+def product_except_self(nums):
+    total = 1
+    for x in nums:
+        total *= x
+    return [total // x for x in nums]
+```
+
+Rules:
+- Do not use division
+- Handle zeros correctly
+- Return a list of integers
+
+Only return the code.

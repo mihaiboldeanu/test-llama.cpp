@@ -1,0 +1,15 @@
+Group words that are anagrams of each other.
+
+def group_anagrams(words: list[str]) -> list[list[str]]:
+
+Requirements:
+- Words that are anagrams must be grouped together
+- Preserve original encounter order within each group
+- Groups themselves must be ordered by the first appearance of any word in that group
+- Return a list of groups
+
+Examples:
+group_anagrams(["eat","tea","tan","ate","nat","bat"]) -> [["eat","tea","ate"],["tan","nat"],["bat"]]
+group_anagrams([]) -> []
+
+Return only Python code, no explanation.

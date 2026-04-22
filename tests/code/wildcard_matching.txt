@@ -1,0 +1,17 @@
+Implement wildcard pattern matching with `?` and `*`.
+
+def is_wildcard_match(s: str, p: str) -> bool:
+
+Rules:
+- `?` matches any single character
+- `*` matches any sequence of characters, including empty
+- The match must cover the entire string
+- Use a dynamic-programming or greedy solution that handles long inputs correctly
+
+Examples:
+is_wildcard_match("aa", "a") -> False
+is_wildcard_match("aa", "*") -> True
+is_wildcard_match("cb", "?a") -> False
+is_wildcard_match("adceb", "*a*b") -> True
+
+Return only Python code, no explanation.

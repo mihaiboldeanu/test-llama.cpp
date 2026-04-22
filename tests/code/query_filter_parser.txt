@@ -1,0 +1,26 @@
+Implement a query parser and evaluator.
+
+def evaluate_query(row: dict, query: str) -> bool:
+
+Query syntax:
+- comparisons: field == value, field != value
+- logical operators: AND, OR
+- parentheses are supported
+
+Values are plain strings without quotes.
+
+Examples:
+row = {"status": "open", "priority": "high"}
+
+evaluate_query(row, "status == open") -> True
+evaluate_query(row, "status == closed OR priority == high") -> True
+evaluate_query(row, "status == closed AND priority == high") -> False
+
+Rules:
+- no eval() or exec()
+- parse properly
+- respect precedence: AND > OR
+- parentheses override precedence
+- extra whitespace may appear between tokens
+
+Return only Python code.

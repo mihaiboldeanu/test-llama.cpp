@@ -1,0 +1,23 @@
+Implement a sliding-window rate limiter.
+
+class RateLimiter:
+    def __init__(self, capacity: int, window: int):
+        ...
+    def allow(self, user: str, timestamp: int) -> bool:
+        ...
+
+Rules:
+- Each user can make at most `capacity` requests per `window` seconds
+- Use a sliding window, not a fixed bucket
+- Timestamps are integers and non-decreasing per user
+- A request at time `t` counts requests with timestamps in the interval `(t - window, t]`
+- Return True if allowed, False otherwise
+
+Example:
+limiter = RateLimiter(2, 10)
+allow("a", 1) -> True
+allow("a", 2) -> True
+allow("a", 3) -> False
+allow("a", 11) -> True
+
+Return only Python code.

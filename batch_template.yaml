@@ -1,0 +1,27 @@
+# Batch run config template
+# Format: model name + options
+
+# Simple - just model name (uses defaults)
+- model: qwen27b
+
+# With context
+- model: qwen27b
+  ctx: 65536
+
+# TurboQuant
+- model: qwen27b
+  turbo3: true
+
+# TurboQuant turbo4
+- model: qwen27b
+  turbo4: true
+
+# Custom KV cache types
+- model: Qwen3.5-9B
+  ctk: q8_0
+  ctv: turbo3
+
+# Mix k=v
+- model: Qwen3.5-9B
+  ctk: q8_0
+  ctv: turbo4

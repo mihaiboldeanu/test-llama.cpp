@@ -1,0 +1,15 @@
+Find the smallest range covering at least one number from each sorted list.
+
+def smallest_range(nums: list[list[int]]) -> list[int]:
+
+Requirements:
+- Each inner list is sorted in ascending order
+- Return [start, end] of the smallest inclusive range containing at least one number from each list
+- If multiple ranges have the same length, return the one with the smaller start
+- Use an efficient heap-based solution
+
+Examples:
+smallest_range([[4,10,15,24,26],[0,9,12,20],[5,18,22,30]]) -> [20,24]
+smallest_range([[1,2,3],[1,2,3],[1,2,3]]) -> [1,1]
+
+Return only Python code, no explanation.

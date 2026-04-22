@@ -1,0 +1,33 @@
+Implement:
+
+def process_logs(logs: list[dict]) -> list[dict]:
+
+Each log:
+{
+  "id": str,
+  "timestamp": int,
+  "value": int
+}
+
+Rules:
+- Remove duplicate ids, keeping the first occurrence
+- Sort by timestamp ascending
+- If timestamps are equal, preserve original order
+- Add field `delta`:
+  difference from previous value in sorted order
+  first element has delta = 0
+
+Example input:
+[
+  {"id":"a","timestamp":2,"value":10},
+  {"id":"b","timestamp":1,"value":5},
+  {"id":"a","timestamp":3,"value":20}
+]
+
+Expected output:
+[
+  {"id":"b","timestamp":1,"value":5,"delta":0},
+  {"id":"a","timestamp":2,"value":10,"delta":5}
+]
+
+Return only Python code.

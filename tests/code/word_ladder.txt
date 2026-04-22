@@ -1,0 +1,16 @@
+Find the length of the shortest transformation sequence from `begin_word` to `end_word`.
+
+def ladder_length(begin_word: str, end_word: str, word_list: list[str]) -> int:
+
+Rules:
+- Change exactly one letter at a time
+- Every intermediate word must be in `word_list`
+- Return 0 if `end_word` is unreachable
+- Return the number of words in the sequence, including begin and end
+
+Examples:
+ladder_length("hit", "cog", ["hot","dot","dog","lot","log","cog"]) -> 5
+ladder_length("hit", "cog", ["hot","dot","dog","lot","log"]) -> 0
+ladder_length("a", "c", ["a","b","c"]) -> 2
+
+Return only Python code, no explanation.

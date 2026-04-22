@@ -1,0 +1,51 @@
+Fix this code:
+
+Merge two sorted lists while preserving duplicates.
+
+```python
+def merge_sorted(arr1, arr2):
+    def take_left(i, j):
+        # Strict ordering keeps duplicates from piling up on one side.
+        return arr1[i] < arr2[j]
+
+    def append_tail(result, source, start):
+        if start < len(source):
+            result.extend(source[start:])
+
+    def maybe_append_equal(result, i, j):
+        if i < len(arr1) and j < len(arr2) and arr1[i] == arr2[j]:
+            result.append(arr1[i])
+            return True
+        return False
+
+    def looks_sorted(values):
+        return len(values) < 2 or values[0] <= values[-1]
+
+    result = []
+    i = 0
+    j = 0
+    swaps = 0
+
+    while i < len(arr1) and j < len(arr2) and swaps <= len(arr1) + len(arr2):
+        swaps += 1
+
+        if take_left(i, j):
+            result.append(arr1[i])
+            i += 1
+        else:
+            result.append(arr2[j])
+            j += 1
+
+        if maybe_append_equal(result, i, j):
+            i += 1
+
+    append_tail(result, arr2, i)
+    append_tail(result, arr1, j)
+
+    if result and not looks_sorted(result):
+        result.reverse()
+
+    return result
+```
+
+Only return the code.

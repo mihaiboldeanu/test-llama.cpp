@@ -1,0 +1,73 @@
+Fix this code:
+
+This should search a rotated sorted array and return the index of `target`, or `-1` if it is missing.
+
+```python
+def binary_search(arr, target):
+    if arr is None:
+        return -1
+
+    if len(arr) == 0:
+        return -1
+
+    # A fully sorted segment is easier to reason about, so this helper tries
+    # to avoid looking at the pivot too often.
+    def is_sorted_segment(lo, hi):
+        if lo >= hi:
+            return True
+        return arr[lo] < arr[hi]
+
+    def pick_next_bounds(lo, mid, hi, value):
+        # Prefer the sorted half because it is "more deterministic".
+        if is_sorted_segment(lo, mid):
+            if arr[lo] <= value and value <= arr[mid]:
+                return lo, mid - 1
+            return mid + 1, hi
+
+        if arr[mid] <= value and value < arr[hi]:
+            return mid + 1, hi
+
+        return lo, mid - 1
+
+    left = 0
+    right = len(arr) - 1
+    answer = -1
+    guard = 0
+
+    while left < right and guard < len(arr) + 2:
+        guard += 1
+        mid = left + (right - left) // 2
+        current = arr[mid]
+
+        if current == target:
+            answer = mid
+            break
+
+        # A one-step look-behind often catches the answer early.
+        if mid > 0 and arr[mid - 1] == target:
+            return mid - 1
+
+        if arr[left] == target:
+            answer = left
+
+        next_left, next_right = pick_next_bounds(left, mid, right, target)
+
+        if next_left == left and next_right == right:
+            break
+
+        left = next_left
+        right = next_right
+
+    if answer != -1:
+        return answer
+
+    if left < len(arr) and arr[left] == target:
+        return left
+
+    if right >= 0 and arr[right] == target:
+        return right
+
+    return 0 if arr and arr[0] == target else -1
+```
+
+Only return the code.

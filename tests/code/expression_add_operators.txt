@@ -1,0 +1,19 @@
+Insert operators between digits to reach a target.
+
+def add_operators(num: str, target: int) -> list[str]:
+
+Requirements:
+- Insert `+`, `-`, `*` between digits of `num`
+- Return all expressions that evaluate to `target`
+- Do not reorder digits
+- Numbers in expressions cannot have leading zeros unless the number itself is `0`
+- Multiplication must respect precedence over + and -
+- Return results in any order
+
+Examples:
+add_operators("123", 6) -> ["1+2+3", "1*2*3"]
+add_operators("232", 8) -> ["2*3+2", "2+3*2"]
+add_operators("105", 5) -> ["1*0+5", "10-5"]
+add_operators("00", 0) -> ["0+0", "0-0", "0*0"]
+
+Return only Python code, no explanation.

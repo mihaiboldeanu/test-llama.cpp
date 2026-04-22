@@ -1,0 +1,26 @@
+Fix this code:
+
+Return the kth smallest value in a BST.
+
+```python
+class TreeNode:
+    def __init__(self, val=0, left=None, right=None):
+        self.val = val
+        self.left = left
+        self.right = right
+
+def kth_smallest(root, k):
+    values = []
+
+    def dfs(node):
+        if not node:
+            return
+        values.append(node.val)
+        dfs(node.left)
+        dfs(node.right)
+
+    dfs(root)
+    return sorted(values)[k]
+```
+
+Only return the code.

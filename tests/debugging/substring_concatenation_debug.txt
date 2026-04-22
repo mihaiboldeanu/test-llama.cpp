@@ -1,0 +1,32 @@
+Fix this code.
+
+Return all starting indices where the substring is a concatenation of all words exactly once.
+
+```python
+from collections import Counter
+
+def find_substring(s, words):
+    if not s or not words:
+        return []
+
+    word_len = len(words[0])
+    total_len = word_len * len(words)
+    need = Counter(words)
+    result = []
+
+    for i in range(len(s) - total_len + 1):
+        seen = {}
+        for j in range(i, i + total_len, word_len):
+            word = s[j:j+word_len]
+            if word not in need:
+                break
+            seen[word] = seen.get(word, 0) + 1
+            if seen[word] >= need[word]:
+                break
+        if seen == need:
+            result.append(i)
+
+    return result
+```
+
+Only return the code.

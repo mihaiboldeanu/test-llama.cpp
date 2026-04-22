@@ -1,0 +1,16 @@
+Find the minimum window substring.
+
+def min_window(s: str, t: str) -> str:
+
+Requirements:
+- Return the smallest substring of `s` that contains all characters from `t`
+- Characters in `t` may repeat and must be matched with multiplicity
+- Return an empty string if no such window exists
+
+Examples:
+min_window("ADOBECODEBANC", "ABC") -> "BANC"
+min_window("a", "a") -> "a"
+min_window("a", "aa") -> ""
+min_window("bba", "ab") -> "ba"
+
+Return only Python code, no explanation.

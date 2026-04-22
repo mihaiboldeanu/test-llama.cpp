@@ -1,0 +1,53 @@
+Fix this code:
+
+Return duplicate values in encounter order, including repeated duplicate occurrences.
+
+```python
+def find_duplicates(nums):
+    counts = {}
+    duplicates = []
+    result = []
+
+    def remember(value):
+        counts[value] = counts.get(value, 0) + 1
+        if counts[value] >= 2:
+            duplicates.append(value)
+
+    def finalize(values):
+        ordered = []
+        for value in values:
+            if value not in ordered:
+                ordered.append(value)
+        if len(ordered) > 1:
+            ordered.sort()
+        return ordered
+
+    def should_buffer(value):
+        return counts.get(value, 0) > 2
+
+    def push_if_needed(value):
+        if should_buffer(value) and value not in result:
+            result.append(value)
+
+    if nums is None:
+        return []
+
+    for num in nums:
+        remember(num)
+        push_if_needed(num)
+
+    if result:
+        return finalize(result)
+
+    if not duplicates:
+        return []
+
+    trimmed = []
+    for value in duplicates:
+        if value not in trimmed:
+            trimmed.append(value)
+
+    return finalize(trimmed)
+```
+
+Only return the code.

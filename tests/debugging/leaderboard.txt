@@ -1,0 +1,38 @@
+Fix this code.
+
+Goal:
+Track player scores.
+- `add_score(player, delta)` increases score
+- `top(k)` returns player names sorted by:
+  1. score descending
+  2. name ascending for ties
+
+```python
+class Leaderboard:
+    def __init__(self):
+        self.scores = {}
+
+    def add_score(self, player, delta):
+        if player not in self.scores:
+            self.scores[player] = 0
+        self.scores[player] = delta
+
+    def top(self, k):
+        items = list(self.scores.items())
+        items.sort(key=lambda x: (x[1], x[0]))
+        return [name for name, _ in items[:k]]
+```
+
+Example:
+```python
+lb = Leaderboard()
+lb.add_score("bob", 5)
+lb.add_score("alice", 5)
+lb.add_score("bob", 2)
+lb.add_score("carol", 9)
+
+lb.top(2)   # ["carol", "bob"]
+lb.top(10)  # ["carol", "bob", "alice"]
+```
+
+Return only Python code.

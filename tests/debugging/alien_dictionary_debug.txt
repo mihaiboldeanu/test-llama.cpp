@@ -1,0 +1,39 @@
+Fix this code.
+
+Return a valid alien character order or "" if impossible.
+
+```python
+from collections import defaultdict, deque
+
+def alien_order(words):
+    graph = defaultdict(set)
+    indegree = defaultdict(int)
+
+    for word in words:
+        for ch in word:
+            indegree[ch] = 0
+
+    for i in range(len(words) - 1):
+        a, b = words[i], words[i + 1]
+        for j in range(min(len(a), len(b))):
+            if a[j] != b[j]:
+                if b[j] not in graph[a[j]]:
+                    graph[a[j]].add(b[j])
+                    indegree[b[j]] += 1
+                break
+
+    queue = deque([ch for ch in indegree if indegree[ch] == 0])
+    order = []
+
+    while queue:
+        ch = queue.popleft()
+        order.append(ch)
+        for nei in graph[ch]:
+            indegree[nei] -= 1
+            if indegree[nei] == 0:
+                queue.append(nei)
+
+    return "".join(order)
+```
+
+Only return the code.
