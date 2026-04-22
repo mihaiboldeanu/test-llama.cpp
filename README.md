@@ -5,7 +5,7 @@
 Backend repos:
 
 - [`llama.cpp`](https://github.com/ggml-org/llama.cpp)
-- [`turboquant_plus`](https://github.com/TheTom/turboquant_plus)
+- [`llama-cpp-turboquant`](https://github.com/TheTom/llama-cpp-turboquant)
 
 The goal is practical comparison on your own hardware. We care about which backend feels better to use, how well it handles our prompts, and how it behaves at long context lengths. This is intentionally not a perplexity/KL-divergence project.
 
