@@ -2,6 +2,9 @@ Fix this code.
 
 Return the minimum window substring.
 
+If `t` is empty, return `""`.
+If no valid window exists, return `""`.
+
 ```python
 def min_window(s, t):
     need = {}

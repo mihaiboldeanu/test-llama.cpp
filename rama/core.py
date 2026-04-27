@@ -2,7 +2,6 @@ import os
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from . import Config
 
@@ -33,6 +32,13 @@ class RunningModel:
     backend: str
 
 
+def get_pid_dir() -> Path:
+    """Get the PID file directory."""
+    pid_dir = Path.home() / ".local" / "state" / "rama" / "pids"
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    return pid_dir
+
+
 def discover_models(config: Config) -> list[ModelInfo]:
     """Discover GGUF files in model_dir."""
     model_dir = config.model_dir
@@ -58,7 +64,7 @@ def discover_models(config: Config) -> list[ModelInfo]:
                 family=family,
                 quant=quant,
                 tags=tags,
-            )
+            ),
         )
 
     return sorted(models, key=lambda m: m.path)
@@ -114,7 +120,9 @@ def detect_tags(filename: str) -> list[str]:
 
 
 def calc_kv_cache(
-    model_size_gb: float, family: str, config: Config
+    model_size_gb: float,
+    family: str,
+    config: Config,
 ) -> tuple[int, str, str]:
     """Calculate max KV cache that fits in VRAM.
     Default: q8_0 for both k and v
@@ -125,30 +133,45 @@ def calc_kv_cache(
     model_vram = model_size_gb
     kv_vram = vram_available - model_vram
 
+    if kv_vram < 0.5:
+        raise RuntimeError(
+            f"Not enough VRAM for KV cache: {kv_vram:.1f}GB available. "
+            f"Model needs {model_vram:.1f}GB, only {vram_available:.1f}GB total."
+        )
+
+    # Very tight VRAM - minimal context
     if kv_vram < 1:
-        return (1024, "q8_0", "q8_0")
+        kv_per_token_kb = {
+            "qwen": _get_qwen_kv_bytes_per_token(model_size_gb),
+            "gemma": _get_gemma_kv_bytes_per_token(model_size_gb),
+            "bonsai": 8000,
+            "gemma31b": _get_gemma_kv_bytes_per_token(model_size_gb),
+        }.get(family, 15000)
+        tight_ctx = int((kv_vram * 1024**3) / kv_per_token_kb)
+        return (max(2048, min(tight_ctx, 8192)), "q8_0", "q8_0")
 
     # Get max_ctx from family config
     family_config = config.families.get(family, {})
     max_ctx_limit = family_config.get("max_ctx", 262144)
 
     # Default: q8_0 for both k and v
-    kv_per_token_kb = {
-        "qwen": _get_qwen_kv_per_token(model_size_gb),
-        "gemma": _get_gemma_kv_per_token(model_size_gb),
+    kv_per_token_bytes = {
+        "qwen": _get_qwen_kv_bytes_per_token(model_size_gb),
+        "gemma": _get_gemma_kv_bytes_per_token(model_size_gb),
         "bonsai": 8000,
-        "gemma31b": _get_gemma_kv_per_token(model_size_gb),
+        "gemma31b": _get_gemma_kv_bytes_per_token(model_size_gb),
     }.get(family, 15000)
 
     # Calculate max ctx with q8_0
-    max_ctx = int((kv_vram * 1024**3) / kv_per_token_kb)
+    max_ctx = int((kv_vram * 1024**3) / kv_per_token_bytes)
     max_ctx = min(max_ctx, max_ctx_limit)
+    max_ctx = min(max_ctx, config.get("default_ctx", 131072))
 
     if max_ctx >= 2048:
         return (max_ctx, "q8_0", "q8_0")
 
     # If not enough VRAM for q8_0, try q4_k_m
-    max_ctx_q4 = int((kv_vram * 1024**3) / (kv_per_token_kb / 4))
+    max_ctx_q4 = int((kv_vram * 1024**3) / (kv_per_token_bytes / 3.7))
     max_ctx_q4 = min(max_ctx_q4, max_ctx_limit)
     if max_ctx_q4 >= 2048:
         return (max_ctx_q4, "q4_k_m", "q4_k_m")
@@ -157,7 +180,7 @@ def calc_kv_cache(
     return (min(1024, max_ctx_limit), "q8_0", "q8_0")
 
 
-def _get_qwen_kv_per_token(size_gb: float) -> int:
+def _get_qwen_kv_bytes_per_token(size_gb: float) -> int:
     if size_gb < 10:
         return 11000  # 9B
     if size_gb < 20:
@@ -167,7 +190,7 @@ def _get_qwen_kv_per_token(size_gb: float) -> int:
     return 60000
 
 
-def _get_gemma_kv_per_token(size_gb: float) -> int:
+def _get_gemma_kv_bytes_per_token(size_gb: float) -> int:
     if size_gb < 10:
         return 5000  # 4B
     if size_gb < 25:
@@ -196,29 +219,47 @@ def is_port_used(port: int) -> bool:
 
 def get_running_models(config: Config) -> list[RunningModel]:
     """Get currently running models from PID dir."""
-    pid_dir = Path.cwd() / ".pids"
+    pid_dir = get_pid_dir()
     if not pid_dir.exists():
         return []
 
     running = []
     for pid_file in pid_dir.glob("model_*.pid"):
-        name = pid_file.stem.replace("model_", "").rsplit("_", 1)[0]
-        port = int(pid_file.stem.rsplit("_", 1)[-1])
-        pid = int(pid_file.read_text().strip())
-
         try:
+            content = pid_file.read_text().strip()
+            if not content:
+                pid_file.unlink()
+                continue
+
+            # Try JSON format first (new format with backend)
+            import json
+
+            try:
+                data = json.loads(content)
+                pid = data["pid"]
+                backend = data.get("backend", "llama.cpp")
+                name = data.get(
+                    "name", pid_file.stem.replace("model_", "").rsplit("_", 1)[0]
+                )
+                port = data.get("port", int(pid_file.stem.rsplit("_", 1)[-1]))
+            except (json.JSONDecodeError, KeyError):
+                # Fall back to plain PID (old format)
+                pid = int(content)
+                backend = "llama.cpp"
+                name = pid_file.stem.replace("model_", "").rsplit("_", 1)[0]
+                port = int(pid_file.stem.rsplit("_", 1)[-1])
+
             os.kill(pid, 0)  # Check if process exists
-            backend = "llama.cpp"  # Could check binary path
             running.append(RunningModel(name, port, pid, backend))
-        except OSError:
-            pid_file.unlink()  # Stale PID file
+        except (OSError, ValueError):
+            pid_file.unlink(missing_ok=True)  # Stale PID file
 
     return running
 
 
-def get_model_pid(config: Config, port: int) -> Optional[int]:
+def get_model_pid(config: Config, port: int) -> int | None:
     """Get PID for a model on given port."""
-    pid_dir = Path.cwd() / ".pids"
+    pid_dir = get_pid_dir()
     for pid_file in pid_dir.glob(f"model_*_{port}.pid"):
         return int(pid_file.read_text().strip())
     return None

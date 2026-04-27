@@ -1,15 +1,79 @@
-# Ruff formatter config for VSCode
+[project]
+name = "rama"
+version = "0.1.0"
+description = "CLI to test and run llama.cpp models"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0",
+]
 
+[project.scripts]
+rama = "rama.__main__:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Ruff config
 root = true
 
-[lint]
-select = ["E", "F", "W", "I", "N", "UP", "YTT", "ANN", "ASYNC", "BAL", "BOS", "BT", "C4", "C90", "COM", "DTZ", "T10", "DJ", "EM", "ERA", "EXE", "F541", "F90", "FBT", "ICN", "G", "INP", "PIE", "T20", "PKG", "P", "Q", "RSE", "RUF", "SIM", "TID", "TCH", "ARG", "PTH", "ERA001", "PL", "N999", "ANN001", "ANN204", "ANN401", "PLR0913", "PLR2004", "S", "TCH001", "TCH002"]
-ignore = ["E501", "ANN101", "ANN102", "ANN401", "PLR0913", "S101", "FBT001", "FBT002", "N999", "ERA001", "PLR2004", "RUF001"]
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "N", "UP", "ANN",
+    "C4", "COM", "DTZ", "T10", "DJ", "EM",
+    "ERA", "EXE", "F541", "F90", "FBT", "ICN", "G", "INP", "PIE",
+    "T20", "Q", "RSE", "RUF", "SIM", "TID", "TCH",
+    "ARG", "PTH", "PL", "N999", "S",
+]
+ignore = [
+    "E501", "ANN401", "PLR0913", "S101",
+    "FBT001", "FBT002", "N999", "ERA001", "PLR2004", "RUF001",
+    "COM812",
+    # Intentional patterns in test/launch code
+    "PLC0415", "PLW1510", "PLW0108", "RUF007",
+    "E722", "S603", "S110", "FBT003",
+    "ANN001", "ANN201", "ANN202", "ANN204",
+    "PLR0911", "PLR0912", "PLR0915",
+    "RUF012", "RUF013", "RUF005",
+    "T201", "PTH111", "PTH123",
+    "S607", "S310", "S311",
+    "EM101", "EM102", "PLW0120", "PLW2901",
+    "ARG001", "F401", "C401", "DTZ005",
+    "SIM105",
+]
 
-[lint.isort]
+[tool.ruff.lint.per-file-ignores]
+"rama/testing.py" = [
+    "PLC0415", "PLW1510", "E722", "PLR0911",
+]
+"rama/launch.py" = [
+    "PLC0415", "PLW1510", "S112", "RUF005",
+]
+"rama/__main__.py" = [
+    "PLC0415", "PLW1510", "PLR0912", "PLR0915",
+    "T201", "S310", "S603", "DTZ005",
+]
+"rama/core.py" = [
+    "PLR0911", "EM102", "ARG001",
+]
+"rama/context_test.py" = [
+    "S311", "PLC0415", "C401", "PLW2901", "ARG001",
+]
+"rama/__init__.py" = [
+    "F401", "PTH123", "PTH111", "ANN204",
+]
+
+[tool.ruff.lint.isort]
 force-single-line = false
 
-[format]
+[tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.11",
+]

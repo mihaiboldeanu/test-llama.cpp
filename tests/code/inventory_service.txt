@@ -29,6 +29,7 @@ POST /reserve/{id}
 - body: {amount}
 - increase reserved
 - amount must be a positive integer
+- if amount <= 0, raise HTTP 400
 - cannot exceed available stock (stock - reserved)
 - else 400
 
@@ -36,6 +37,7 @@ POST /release/{id}
 - body: {amount}
 - decrease reserved
 - amount must be a positive integer
+- if amount <= 0, raise HTTP 400
 - cannot go below 0
 - else 400
 

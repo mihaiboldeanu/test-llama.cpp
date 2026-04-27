@@ -6,6 +6,10 @@ Query syntax:
 - comparisons: field == value, field != value
 - logical operators: AND, OR
 - parentheses are supported
+- comparisons are space-delimited tokens
+- values are single tokens with no spaces or quotes
+- operator precedence is AND before OR
+- parentheses override precedence
 
 Values are plain strings without quotes.
 

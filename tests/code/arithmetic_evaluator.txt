@@ -8,7 +8,7 @@ Requirements:
 - support unary minus
 - respect operator precedence
 - division truncates toward zero
-- spaces may appear anywhere
+- spaces may appear anywhere and must be ignored
 - no `eval()` or `exec()`
 
 Examples:

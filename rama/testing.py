@@ -1,9 +1,13 @@
+import csv
 import json
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
+from .log import setup_logging
+
+logger = setup_logging()
 
 
 def _resolve_python_bin() -> str:
@@ -69,8 +73,9 @@ def run_chat_completion(
     temperature: float = 0.0,
     max_tokens: int = 4096,
     seed: int = 42,
+    retries: int = 2,
 ) -> str:
-    """Call the model via llama.cpp API."""
+    """Call the model via llama.cpp API with retry support."""
     import urllib.error
     import urllib.request
 
@@ -89,14 +94,30 @@ def run_chat_completion(
         headers={"Content-Type": "application/json"},
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            return result.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except urllib.error.HTTPError as e:
-        return f"ERROR: {e.code} {e.reason}"
-    except Exception as e:
-        return f"ERROR: {str(e)}"
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                return (
+                    result.get("choices", [{}])[0]
+                    .get(
+                        "message",
+                        {},
+                    )
+                    .get("content", "")
+                )
+        except urllib.error.HTTPError as e:
+            logger.error(
+                "HTTP error on attempt %d: %d %s", attempt + 1, e.code, e.reason
+            )
+            if attempt == retries:
+                return f"ERROR: {e.code} {e.reason}"
+        except Exception as e:
+            logger.error("Error on attempt %d: %s", attempt + 1, e)
+            if attempt == retries:
+                return f"ERROR: {e!s}"
+
+    return "ERROR: Max retries exceeded"
 
 
 def score_response(judge_port: int, test_name: str, prompt: str, response: str) -> int:
@@ -116,7 +137,11 @@ Score based on:
 Return ONLY a number from 1-10. No explanation."""
 
     result = run_chat_completion(
-        judge_port, judge_prompt, temperature=0.0, max_tokens=5, seed=42
+        judge_port,
+        judge_prompt,
+        temperature=0.0,
+        max_tokens=5,
+        seed=42,
     )
 
     # Extract number
@@ -177,7 +202,9 @@ def _extract_code(response: str) -> str:
     # Try fenced code blocks first.
     fenced_blocks = []
     for match in re.finditer(
-        r"```([^\n`]*)\n?(.*?)(?:```|$)", response, re.DOTALL | re.IGNORECASE
+        r"```([^\n`]*)\n?(.*?)(?:```|$)",
+        response,
+        re.DOTALL | re.IGNORECASE,
     ):
         language = (match.group(1) or "").strip().lower()
         body = match.group(2)
@@ -205,7 +232,9 @@ def _extract_code(response: str) -> str:
 
 
 def _evaluate_single_response(
-    test_name: str, category: str, response: str
+    test_name: str,
+    category: str,
+    response: str,
 ) -> tuple[bool, bool, int, str]:
     """Evaluate one response with the same logic used by the live test runner."""
     ran = False
@@ -258,7 +287,7 @@ def _evaluate_single_response(
         code = _extract_code(response)
         num_correct, total_tests = _check_debug_test(code, test_name)
         correct = total_tests > 0 and num_correct == total_tests
-        score = 0 if total_tests == 0 else (10 * num_correct) // total_tests
+        score = 0 if total_tests == 0 else round(10 * num_correct / total_tests)
 
     return ran, correct, score, output
 
@@ -306,11 +335,14 @@ print(to_list(merge_k_lists([build([]), build([1])])))
 print(to_list(merge_k_lists([build([0]), build([0])])))
 print(to_list(merge_k_lists([build([-3, -1, 2]), build([-2, 2, 3]), build([])])))
 print(to_list(merge_k_lists([build([1, 1]), build([]), build([1]), build([-1, 0, 2]), build([])])))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -353,11 +385,14 @@ print(ladder_length("talk", "tail", ["tall", "tail", "balk", "bail"]))
 print(ladder_length("red", "tax", ["ted", "tex", "red", "tax", "tad", "den", "rex", "pee"]))
 print(ladder_length("same", "same", ["same", "came", "lame"]))
 print(ladder_length("cold", "warm", ["cord", "card", "ward", "warm", "wold", "wald", "worm"]))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -391,11 +426,14 @@ print(min_window("aa", "aa"))
 print(min_window("bba", "ab"))
 print(min_window("cabwefgewcwaefgcf", "cae"))
 print(min_window("anything", ""))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -429,11 +467,14 @@ print(is_match("aab", "c*a*b"))
 print(is_match("mississippi", "mis*is*p*."))
 print(is_match("ab", ".*c"))
 print(is_match("aaa", "ab*a*c*a"))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -497,11 +538,14 @@ puzzles = [
 for board in puzzles:
     solve_sudoku(board)
     print(board == solved)
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -544,11 +588,14 @@ cases = [
 ]
 for nums1, nums2 in cases:
     print(find_median_sorted_arrays(nums1, nums2))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -599,11 +646,14 @@ print(find_substring("lingmindraboofooowingdingbarrwingmonkeypoundcake", ["fooo"
 print(find_substring("", ["foo"]))
 print(find_substring("aaaaaa", ["aa", "aa"]))
 print(find_substring("aaaaa", ["a", "a", "a"]))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -648,11 +698,14 @@ print(sorted(remove_invalid_parentheses(")(")))
 print(sorted(remove_invalid_parentheses("n")))
 print(sorted(remove_invalid_parentheses("(((")))
 print(sorted(remove_invalid_parentheses("()v)")))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -697,11 +750,14 @@ print(is_wildcard_match("acdcb", "a*c?b"))
 print(is_wildcard_match("", "*"))
 print(is_wildcard_match("", "?"))
 print(is_wildcard_match("abcde", "a*de"))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -735,11 +791,14 @@ print(num_distinct("abc", ""))
 print(num_distinct("", "a"))
 print(num_distinct("aaaaa", "aa"))
 print(num_distinct("ABCDE", "ACE"))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -756,9 +815,9 @@ print(num_distinct("ABCDE", "ACE"))
 def _check_top_k_frequent(response: str) -> bool:
     code = _extract_code(response)
     import ast
-    from collections import Counter
     import re
     import tempfile
+    from collections import Counter
     from pathlib import Path
 
     if not re.search(r"def top_k_frequent\b", code):
@@ -803,11 +862,14 @@ cases = [
 ]
 for nums, k in cases:
     print(top_k_frequent(nums, k))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -860,11 +922,14 @@ cases = [
 ]
 for matrix in cases:
     print(spiral_order(matrix))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -917,11 +982,14 @@ cases = [
 ]
 for words in cases:
     print(group_anagrams(words))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -967,11 +1035,14 @@ cases = [
 ]
 for num, target in cases:
     print(add_operators(num, target))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1023,11 +1094,14 @@ cases = [
 ]
 for nums in cases:
     print(smallest_range(nums))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1086,11 +1160,14 @@ cases = [
 ]
 for words in cases:
     print(alien_order(words))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1148,11 +1225,14 @@ boards = [
 ]
 for board in boards:
     run(board)
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1232,11 +1312,14 @@ cases = [
 ]
 for board, words in cases:
     print(find_words(board, words))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1307,6 +1390,16 @@ def make_body(route, **kwargs):
     annotation = params[-1].annotation
     return annotation(**kwargs)
 
+def make_unvalidated_body(route, **kwargs):
+    params = list(inspect.signature(route.endpoint).parameters.values())
+    assert params, "route must accept a body parameter"
+    annotation = params[-1].annotation
+    if hasattr(annotation, "model_construct"):
+        return annotation.model_construct(**kwargs)
+    if hasattr(annotation, "construct"):
+        return annotation.construct(**kwargs)
+    return annotation(**kwargs)
+
 def expect_status(status_code, fn, *args):
     try:
         fn(*args)
@@ -1340,16 +1433,19 @@ expect_status(400, reserve_item.endpoint, "c", make_body(reserve_item, amount=1)
 print(json.dumps(to_jsonable(release_item.endpoint("c", make_body(release_item, amount=1))), sort_keys=True))
 print(json.dumps(to_jsonable(list_items.endpoint()), sort_keys=True))
 expect_status(404, get_item.endpoint, "missing")
-expect_status(400, reserve_item.endpoint, "a", make_body(reserve_item, amount=0))
-expect_status(400, reserve_item.endpoint, "a", make_body(reserve_item, amount=-1))
-expect_status(400, release_item.endpoint, "a", make_body(release_item, amount=0))
-expect_status(400, release_item.endpoint, "a", make_body(release_item, amount=-1))
-"""
+expect_status(400, reserve_item.endpoint, "a", make_unvalidated_body(reserve_item, amount=0))
+expect_status(400, reserve_item.endpoint, "a", make_unvalidated_body(reserve_item, amount=-1))
+expect_status(400, release_item.endpoint, "a", make_unvalidated_body(release_item, amount=0))
+expect_status(400, release_item.endpoint, "a", make_unvalidated_body(release_item, amount=-1))
+""",
             )
             t = f.name
 
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1442,11 +1538,14 @@ print(limiter.allow("b", 13))
 print(limiter.allow("c", 100))
 print(limiter.allow("c", 109))
 print(limiter.allow("c", 110))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1506,11 +1605,14 @@ print(evaluate_query(row, "  status   ==   open   AND   (priority == high OR own
 print(evaluate_query(row, "status != open OR (priority == low AND owner == alice)"))
 print(evaluate_query(row, "((status == open)) AND owner == alice"))
 print(evaluate_query(row, "(status == closed OR priority == low) AND owner == alice"))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1600,11 +1702,14 @@ print(process_logs([]))
 print(process_logs(logs4))
 print(process_logs(logs5))
 print(process_logs(logs6))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1680,11 +1785,14 @@ cases = [
 ]
 for grid, _ in cases:
     print(shortest_path_with_break(grid))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1767,11 +1875,14 @@ expect_status(400, finish_job.endpoint, "a")
 print(json.dumps(to_jsonable(get_job.endpoint("a")), sort_keys=True))
 print(json.dumps(to_jsonable(list_jobs.endpoint()), sort_keys=True))
 expect_status(404, get_job.endpoint, "missing")
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -1831,11 +1942,14 @@ print(evaluate("14 / -3"))
 print(evaluate("-14 / 3"))
 print(evaluate("(-2)*(-3) + 4"))
 print(evaluate("1 - -2 * (3 + 4)"))
-"""
+""",
             )
             t = f.name
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         Path(t).unlink(missing_ok=True)
         if result.returncode != 0:
@@ -2369,11 +2483,14 @@ print(has_cycle(build([1,2,3,4], 1)))
 print(has_cycle(build([1,2,3,4], -1)))
 print(has_cycle(build([7,7,7,7], -1)))
 print(has_cycle(build([9,8,7,6,5], 3)))
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2410,11 +2527,14 @@ print(c.get("y", 8))
 c.cleanup(10)
 print(c.get("y", 10))
 print(sorted(c.data.keys()))
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2450,11 +2570,14 @@ print(lb.top(3))
 print(lb.top(0))
 lb.add_score("erin", 7)
 print(lb.top(4))
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2491,7 +2614,10 @@ print(lb.top(4))
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2518,7 +2644,10 @@ print(lb.top(4))
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2541,7 +2670,10 @@ print(lb.top(4))
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2564,11 +2696,16 @@ print(lb.top(4))
             return 0, len(tests)
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                calls = [f"print(find_words({board}, {words}))" for board, words, _ in tests]
+                calls = [
+                    f"print(find_words({board}, {words}))" for board, words, _ in tests
+                ]
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2620,11 +2757,14 @@ cases = [
 for words, expect_valid in cases:
     order = alien_order(words)
     print(is_valid_order(words, order) if expect_valid else order == '')
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2661,11 +2801,14 @@ cases = [
 ]
 for board in cases:
     run(board)
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=20
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2688,11 +2831,16 @@ for board in cases:
             return 0, len(tests)
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                calls = [f"print(find_substring({s!r}, {words}))" for s, words, _ in tests]
+                calls = [
+                    f"print(find_substring({s!r}, {words}))" for s, words, _ in tests
+                ]
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2715,11 +2863,16 @@ for board in cases:
             return 0, len(tests)
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                calls = [f"print(max_sliding_window({nums}, {k}))" for nums, k, _ in tests]
+                calls = [
+                    f"print(max_sliding_window({nums}, {k}))" for nums, k, _ in tests
+                ]
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2755,11 +2908,14 @@ for matrix in cases:
     original = copy.deepcopy(matrix)
     rotate(matrix)
     print(matrix)
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2787,7 +2943,10 @@ for matrix in cases:
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2845,11 +3004,14 @@ cases = [
 for values, k in cases:
     root = build_tree(values)
     print(kth_smallest(root, k))
-"""
+""",
                 )
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2873,11 +3035,17 @@ for values, k in cases:
             return 0, len(tests)
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                calls = [f"print(coin_change({coins}, {amount}))" for coins, amount, _ in tests]
+                calls = [
+                    f"print(coin_change({coins}, {amount}))"
+                    for coins, amount, _ in tests
+                ]
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2904,7 +3072,10 @@ for values, k in cases:
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -2934,7 +3105,10 @@ for values, k in cases:
                 f.write(build_script(code, calls))
                 t = f.name
             result = subprocess.run(
-                [PYTHON_BIN, t], capture_output=True, text=True, timeout=10
+                [PYTHON_BIN, t],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             Path(t).unlink(missing_ok=True)
             if result.returncode != 0:
@@ -3003,7 +3177,7 @@ for values, k in cases:
                         s, expected = tc
                         if expected is ValueError:
                             calls.append(
-                                f"try:\n    print({call_name}({s!r}))\nexcept Exception as e:\n    print(f'EXC:{{type(e).__name__}}')"
+                                f"try:\n    print({call_name}({s!r}))\nexcept Exception as e:\n    print(f'EXC:{{type(e).__name__}}')",
                             )
                         else:
                             calls.append(f"print({call_name}({s!r}))")
@@ -3014,7 +3188,10 @@ for values, k in cases:
             t = f.name
 
         result = subprocess.run(
-            [PYTHON_BIN, t], capture_output=True, text=True, timeout=15
+            [PYTHON_BIN, t],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         Path(t).unlink(missing_ok=True)
 
@@ -3089,8 +3266,8 @@ for values, k in cases:
 
 def run_tests(
     port: int,
-    judge_port: Optional[int] = None,
-    categories: list[str] = None,
+    judge_port: int | None = None,
+    categories: list[str] | None = None,
     use_llm_judge: bool = True,
 ) -> TestSuiteResult:
     """Run test suite on a running model."""
@@ -3108,19 +3285,21 @@ def run_tests(
             test_name = test_file.stem
             prompt = test_file.read_text().strip()
 
-            print(f"  Running {category}/{test_name}...")
+            logger.info("Running %s/%s...", category, test_name)
 
             # Run test
             response = run_chat_completion(port, prompt)
 
             ran, correct, score, output = _evaluate_single_response(
-                test_name, category, response
+                test_name,
+                category,
+                response,
             )
             if category in ["code", "debugging"]:
-                print(f"    ran={ran}")
-                print(f"    correct={correct}")
+                logger.debug("ran=%s", ran)
+                logger.debug("correct=%s", correct)
                 if output:
-                    print(f"    output: {output[:100]}")
+                    logger.debug("output: %s", output[:100])
 
             results.append(
                 TestResult(
@@ -3131,7 +3310,7 @@ def run_tests(
                     ran=ran,
                     correct=correct,
                     score=score,
-                )
+                ),
             )
 
     # Calculate overall score
@@ -3195,7 +3374,6 @@ def save_results_json(result: TestSuiteResult, path: Path) -> None:
 
 def save_results_csv(results: list[dict], path: Path) -> None:
     """Save batch results to CSV with one aggregate column per task type."""
-    import csv
 
     def aggregate_category_score(tests: list[dict], category: str) -> str:
         category_tests = [t for t in tests if t.get("category") == category]
@@ -3231,7 +3409,7 @@ def save_results_csv(results: list[dict], path: Path) -> None:
         ]
         rows.append(row)
 
-    with open(path, "w", newline="") as f:
+    with path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(rows)
@@ -3254,7 +3432,7 @@ def reevaluate_batch_results_file(path: Path) -> list[dict]:
         tests = run.get("tests", [])
         if tests:
             run["score"] = sum(float(t.get("score", 0) or 0) for t in tests) / len(
-                tests
+                tests,
             )
         else:
             run["score"] = 0.0

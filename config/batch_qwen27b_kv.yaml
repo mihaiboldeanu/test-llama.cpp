@@ -1,0 +1,49 @@
+# Qwen 27B batch - KV cache comparison
+
+# --- Qwen3.6-27B-Q4_K_M ---
+- model: Qwen3.6-27B-Q4_K_M
+  ctx: 65536
+  ctk: q8_0
+  ctv: q8_0
+- model: Qwen3.6-27B-Q4_K_M
+  ctx: 65536
+  ctk: q4_k_m
+  ctv: q4_k_m
+- model: Qwen3.6-27B-Q4_K_M
+  ctx: 65536
+  turbo3: true
+- model: Qwen3.6-27B-Q4_K_M
+  ctx: 65536
+  turbo4: true
+
+# --- Qwen_Qwen3.6-27B-Q5_K_L ---
+- model: Qwen_Qwen3.6-27B-Q5_K_L
+  ctx: 65536
+  ctk: q8_0
+  ctv: q8_0
+- model: Qwen_Qwen3.6-27B-Q5_K_L
+  ctx: 65536
+  ctk: q4_k_m
+  ctv: q4_k_m
+- model: Qwen_Qwen3.6-27B-Q5_K_L
+  ctx: 65536
+  turbo3: true
+- model: Qwen_Qwen3.6-27B-Q5_K_L
+  ctx: 65536
+  turbo4: true
+
+# --- Qwen_Qwen3.6-27B-Q5_K_S ---
+- model: Qwen_Qwen3.6-27B-Q5_K_S
+  ctx: 65536
+  ctk: q8_0
+  ctv: q8_0
+- model: Qwen_Qwen3.6-27B-Q5_K_S
+  ctx: 65536
+  ctk: q4_k_m
+  ctv: q4_k_m
+- model: Qwen_Qwen3.6-27B-Q5_K_S
+  ctx: 65536
+  turbo3: true
+- model: Qwen_Qwen3.6-27B-Q5_K_S
+  ctx: 65536
+  turbo4: true
