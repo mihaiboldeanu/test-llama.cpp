@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "turboquant_repo": "https://github.com/TheTom/llama-cpp-turboquant.git",
     "reasoning_budget": 512,
     "reasoning_budget_message": "I have thought enough, let's move to answering.",
-    "cuda_root": "/usr/local/cuda",
+    "cuda_root": "/opt/cuda-13.1",
     "build_jobs": 8,
     "threads": 8,
     "threads_batch": 16,
