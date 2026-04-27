@@ -1,35 +1,48 @@
+import json
+import shutil
+import subprocess
+import time
+import urllib.request
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
-from . import Config
-from .context_test import format_context_results, run_context_suite
-from .core import discover_models, get_running_models, is_port_used
+from . import DEFAULT_CONFIG, Config
+from .context_test import format_context_results, run_needle_suite
+from .core import calc_kv_cache, discover_models, get_running_models, is_port_used
 from .launch import build_backend, start_model, stop_model
 from .testing import (
     discover_tests,
     format_markdown,
     generate_online_eval_prompt,
     run_tests,
+    save_results_csv,
 )
 
 console = Console()
 
+# Default test categories for "all"
+DEFAULT_TEST_CATEGORIES = ["code", "debugging", "creative"]
 
-def get_config(config_path: Optional[str] = None) -> Config:
+
+def get_config(config_path: str | None = None) -> Config:
     return Config(config_path)
 
 
-app = typer.Typer(name="test-llama", help="CLI to test and run llama.cpp models")
+app = typer.Typer(name="rama", help="CLI to test and run llama.cpp models")
 
 
 @app.command()
 def list(
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """List available models."""
@@ -62,8 +75,11 @@ def list(
 
 @app.command()
 def running(
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Show currently running models."""
@@ -89,33 +105,53 @@ def running(
 @app.command()
 def start(
     model_name: str = typer.Argument(..., help="Model name or alias"),
-    port: Optional[int] = typer.Option(None, "--port", "-p", help="Port to use"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Port to use"),
     turbo3: bool = typer.Option(
-        False, "--turbo3", help="Use TurboQuant with turbo3 KV cache"
+        False,
+        "--turbo3",
+        help="Use TurboQuant with turbo3 KV cache",
     ),
     turbo4: bool = typer.Option(
-        False, "--turbo4", help="Use TurboQuant with turbo4 KV cache"
+        False,
+        "--turbo4",
+        help="Use TurboQuant with turbo4 KV cache",
     ),
-    ctx_size: Optional[int] = typer.Option(
-        None, "--ctx", help="Context size (auto calculated if not set)"
+    ctx_size: int | None = typer.Option(
+        None,
+        "--ctx",
+        help="Context size (auto calculated if not set)",
     ),
     fit: bool = typer.Option(
-        False, "--fit", help="Fit model to VRAM (splits MoE layers between RAM/VRAM)"
+        True,
+        "--fit/--no-fit",
+        help="Auto-fit model to VRAM (default: on)",
     ),
-    no_offload_kv: bool = typer.Option(
-        False, "--no-offload-kv", help="Don't offload KV to VRAM"
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        "-f",
+        help="Run server in foreground (Ctrl+C to stop)",
     ),
-    ctk: Optional[str] = typer.Option(
-        None, "--ctk", help="KV cache type: turbo3, turbo4, q8_0, q4_k_m, etc."
+    ctk: str | None = typer.Option(
+        None,
+        "--ctk",
+        help="KV cache type: turbo3, turbo4, q8_0, q4_k_m, etc.",
     ),
-    ctv: Optional[str] = typer.Option(
-        None, "--ctv", help="KV cache v type: turbo3, turbo4, q8_0, q4_k_m, etc."
+    ctv: str | None = typer.Option(
+        None,
+        "--ctv",
+        help="KV cache v type: turbo3, turbo4, q8_0, q4_k_m, etc.",
     ),
-    seed: Optional[int] = typer.Option(
-        None, "--seed", help="Random seed for generation"
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        help="Random seed for generation",
     ),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Start a model."""
@@ -152,28 +188,19 @@ def start(
 
     # Fit mode options
     config_item = {}
-    if fit:
-        config_item["fit"] = True
-    if no_offload_kv:
-        config_item["no_offload_kv"] = True
+    config_item["fit"] = fit
     if seed is not None:
         config_item["seed"] = seed
-    config_item["no_warmup"] = True
-    config_item["cache_ram"] = 0
-    config_item["log_verbosity"] = 1
-    config_item["no_context_shift"] = False
 
     # Show what context we'll get
     if ctx_size is None:
-        from .core import calc_kv_cache
-
         ctx, qk, qv = calc_kv_cache(model.size_gb, model.family, cfg)
         console.print(
-            f"[dim]Model: {model.name} ({model.size_gb}GB, {model.family})[/dim]"
+            f"[dim]Model: {model.name} ({model.size_gb}GB, {model.family})[/dim]",
         )
         console.print(f"[dim]Auto ctx={ctx}, ctk={qk}, ctv={qv}[/dim]")
         if fit:
-            console.print("[dim]--fit: split MoE layers between RAM/VRAM[/dim]")
+            console.print("[dim]--fit: auto-fit model to VRAM[/dim]")
 
     try:
         result = start_model(
@@ -186,14 +213,20 @@ def start(
             seed=seed,
             config=cfg,
             config_item=config_item,
+            foreground=foreground,
         )
+        if foreground:
+            console.print("\n[cyan]Server stopped.[/cyan]")
+            return
         console.print("\n[green]Model started![/green]")
         console.print(f"  Name: {result.name}")
         console.print(f"  Port: {result.port}")
         console.print(f"  PID: {result.pid}")
         console.print(f"  Backend: {result.backend}")
         console.print(f"  Context: {result.ctx_size}")
-        print(f"\n  Chat: http://127.0.0.1:{result.port}/v1/chat/completions")
+        console.print(
+            f"\n  Chat: http://{cfg['host']}:{result.port}/v1/chat/completions"
+        )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -202,8 +235,11 @@ def start(
 @app.command()
 def stop(
     port: int = typer.Argument(..., help="Port to stop"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Stop a model."""
@@ -219,11 +255,17 @@ def stop(
 @app.command()
 def build(
     backend: str = typer.Argument(..., help="Backend: llama.cpp, turboquant, or all"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
     force: bool = typer.Option(
-        False, "--force", "-f", help="Force rebuild even if up to date"
+        False,
+        "--force",
+        "-f",
+        help="Force rebuild even if up to date",
     ),
     cpu_only: bool = typer.Option(False, "--cpu-only", help="CPU-only build (no CUDA)"),
 ) -> None:
@@ -250,8 +292,11 @@ def build(
 @app.command()
 def status(
     port: int = typer.Argument(..., help="Check if port is in use"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Check if port is in use."""
@@ -264,20 +309,84 @@ def status(
 @app.command()
 def init(
     config_path: str = typer.Option(
-        "test_llama.yaml", "--config", "-c", help="Config file path"
+        "rama.yaml",
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
-    """Create a config file."""
-    import shutil
-
-    src = Path(__file__).parent.parent / "test_llama.yaml"
+    """Create a config file and clone missing backend repos."""
+    src = Path(__file__).parent.parent / "rama.yaml"
     dst = Path(config_path).resolve()
 
     if dst.exists():
         console.print(f"[yellow]Config already exists: {dst}[/yellow]")
         return
 
-    shutil.copy(src, dst)
+    # Write config from template or defaults
+    if src.exists():
+        shutil.copy2(src, dst)
+    else:
+        # Fallback: generate from DEFAULT_CONFIG
+        with open(dst, "w") as f:
+            yaml.dump(DEFAULT_CONFIG, f, default_flow_style=False)
+    console.print(f"[green]Created config: {dst}[/green]")
+
+    # Clone llama.cpp if missing (use config defaults for paths)
+    llama_cpp_dir = Path(
+        DEFAULT_CONFIG.get("llama_cpp_dir", str(Path.home() / "Projects" / "llama.cpp"))
+    )
+    if not llama_cpp_dir.exists():
+        console.print(f"[cyan]Cloning llama.cpp to {llama_cpp_dir}...[/cyan]")
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                DEFAULT_CONFIG.get(
+                    "llama_cpp_repo", "https://github.com/ggml-org/llama.cpp.git"
+                ),
+                str(llama_cpp_dir),
+            ],
+            check=True,
+        )
+        console.print("[green]Cloned llama.cpp[/green]")
+    else:
+        console.print(f"[dim]llama.cpp already exists at {llama_cpp_dir}[/dim]")
+
+    # Clone turboquant if missing
+    turbo_dir = Path(
+        DEFAULT_CONFIG.get(
+            "turbo_dir", str(Path.home() / "Projects" / "llama-cpp-turboquant")
+        )
+    )
+    if not turbo_dir.exists():
+        console.print(f"[cyan]Cloning turboquant to {turbo_dir}...[/cyan]")
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                DEFAULT_CONFIG.get(
+                    "turboquant_repo",
+                    "https://github.com/TheTom/llama-cpp-turboquant.git",
+                ),
+                str(turbo_dir),
+            ],
+            check=True,
+        )
+        console.print("[green]Cloned turboquant[/green]")
+    else:
+        console.print(f"[dim]turboquant already exists at {turbo_dir}[/dim]")
+
+    # Copy and update config with actual paths
+    with open(src) as f:
+        config = yaml.safe_load(f) or {}
+
+    config["llama_cpp_dir"] = str(llama_cpp_dir)
+    config["turbo_dir"] = str(turbo_dir)
+
+    with open(dst, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+
     console.print(f"[green]Created config: {dst}[/green]")
     console.print("[dim]Edit it to customize paths![/dim]")
 
@@ -286,27 +395,38 @@ def init(
 def test(
     port: int = typer.Argument(..., help="Port of running model"),
     categories: str = typer.Option(
-        "all", "--categories", "-c", help="Comma-separated: code,debugging,creative"
+        "all",
+        "--categories",
+        "-c",
+        help="Comma-separated: code,debugging,creative",
     ),
-    judge_port: Optional[int] = typer.Option(
-        None, "--judge", "-j", help="Port of judge model for scoring"
+    judge_port: int | None = typer.Option(
+        None,
+        "--judge",
+        "-j",
+        help="Port of judge model for scoring",
     ),
     no_judge: bool = typer.Option(
-        False, "--no-judge", help="Skip LLM-as-judge scoring"
+        False,
+        "--no-judge",
+        help="Skip LLM-as-judge scoring",
     ),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Save results to file"
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Save results to file",
     ),
     format: str = typer.Option(
-        "table", "--format", "-f", help="Output format: table, markdown, json, eval"
+        "table",
+        "--format",
+        "-f",
+        help="Output format: table, markdown, json, eval",
     ),
 ) -> None:
     """Run tests on a running model."""
     # Parse categories
-    if categories == "all":
-        cats = ["code", "debugging", "creative"]
-    else:
-        cats = categories.split(",")
+    cats = DEFAULT_TEST_CATEGORIES if categories == "all" else categories.split(",")
 
     console.print(f"[cyan]Running tests on port {port}...[/cyan]")
     if not no_judge and judge_port:
@@ -330,8 +450,6 @@ def test(
         console.print("\n[yellow]Copy the following for online evaluation:[/yellow]\n")
         console.print(generate_online_eval_prompt(result.results))
     elif format == "json":
-        import json
-
         console.print(
             json.dumps(
                 {
@@ -339,7 +457,7 @@ def test(
                     "tests": [(r.name, r.category, r.score) for r in result.results],
                 },
                 indent=2,
-            )
+            ),
         )
     elif format == "markdown":
         console.print(format_markdown(result))
@@ -373,13 +491,14 @@ def tests(
 
 @app.command()
 def ctxinfo(
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Show context info for all available models."""
-    from .core import calc_kv_cache
-
     cfg = get_config(config_path)
     models = discover_models(cfg)
 
@@ -401,7 +520,7 @@ def ctxinfo(
 
     console.print(table)
     console.print(
-        f"\n[dim]Based on {cfg.vram_available_gb}GB available VRAM ({cfg['vram_total_gb']}GB - {cfg['vram_headroom_gb']}GB headroom)[/dim]"
+        f"\n[dim]Based on {cfg.vram_available_gb}GB available VRAM ({cfg['vram_total_gb']}GB - {cfg['vram_headroom_gb']}GB headroom)[/dim]",
     )
 
 
@@ -409,21 +528,22 @@ def ctxinfo(
 def context(
     port: int = typer.Argument(..., help="Port of running model"),
     files: str = typer.Argument(..., help="Comma-separated paths to text files"),
-    ctx_sizes: str = typer.Option(
-        "10240,32768,65536,131072,262144",
-        "--ctx-sizes",
-        help="Comma-separated context sizes",
+    needle_loc: str = typer.Option(
+        "beginning,middle,end",
+        "--needle-loc",
+        "-n",
+        help="Where to hide the needle: beginning, middle, end, or percentage (e.g., 25%, 75%). Comma-separated for multiple locations.",
     ),
-    seed: int = typer.Option(42, "--seed", help="Random seed for the context prompt generator"),
+    seed: int | None = typer.Option(
+        None, "--seed", help="Random seed for needle generation"
+    ),
 ) -> None:
-    """Test long context handling - stress test at various context sizes.
+    """Needle-in-a-haystack test - hide a token in text and see if the model finds it.
 
-    Tests if models can handle large context without:
-    - Looping/repetition
-    - Losing track of information
-    - Degrading output quality
+    Examples:
+      rama context 11435 book.txt -n beginning
+      rama context 11435 book.txt -n beginning,25%,middle,75%,end
     """
-
     # Parse files
     file_paths = [Path(f.strip()) for f in files.split(",")]
     for f in file_paths:
@@ -431,14 +551,14 @@ def context(
             console.print(f"[red]File not found: {f}[/red]")
             raise typer.Exit(1)
 
-    # Parse ctx sizes
-    sizes = [int(s.strip()) for s in ctx_sizes.split(",")]
+    # Parse needle locations
+    locations = [loc.strip() for loc in needle_loc.split(",")]
 
-    console.print("[cyan]Running context stress tests...[/cyan]")
+    console.print("[cyan]Running needle-in-haystack tests...[/cyan]")
     console.print(f"Files: {', '.join(f.name for f in file_paths)}")
-    console.print(f"Context sizes: {sizes}")
+    console.print(f"Needle locations: {locations}")
 
-    results = run_context_suite(port, file_paths, sizes, seed=seed)
+    results = run_needle_suite(port, file_paths, locations, seed=seed)
 
     console.print("\n" + format_context_results(results))
 
@@ -446,28 +566,39 @@ def context(
 @app.command()
 def run(
     model_name: str = typer.Argument(..., help="Model name or alias"),
-    port: Optional[int] = typer.Option(None, "--port", "-p", help="Port to use"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Port to use"),
     turbo3: bool = typer.Option(
-        False, "--turbo3", help="Use TurboQuant with turbo3 KV cache"
+        False,
+        "--turbo3",
+        help="Use TurboQuant with turbo3 KV cache",
     ),
     turbo4: bool = typer.Option(
-        False, "--turbo4", help="Use TurboQuant with turbo4 KV cache"
+        False,
+        "--turbo4",
+        help="Use TurboQuant with turbo4 KV cache",
     ),
-    ctx_size: Optional[int] = typer.Option(None, "--ctx", help="Context size"),
-    ctk: Optional[str] = typer.Option(None, "--ctk", help="KV cache type"),
-    ctv: Optional[str] = typer.Option(None, "--ctv", help="KV cache v type"),
-    fit: bool = typer.Option(False, "--fit", help="Use launcher fit policy"),
-    no_offload_kv: bool = typer.Option(
-        False, "--no-offload-kv", help="Don't offload KV to VRAM"
+    ctx_size: int | None = typer.Option(None, "--ctx", help="Context size"),
+    ctk: str | None = typer.Option(None, "--ctk", help="KV cache type"),
+    ctv: str | None = typer.Option(None, "--ctv", help="KV cache v type"),
+    fit: bool = typer.Option(
+        True, "--fit/--no-fit", help="Auto-fit model to VRAM (default: on)"
     ),
-    seed: int = typer.Option(42, "--seed", help="Random seed for generation"),
+    seed: int | None = typer.Option(
+        None, "--seed", help="Random seed for generation (default: random)"
+    ),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
-    judge_port: Optional[int] = typer.Option(
-        None, "--judge", "-j", help="Judge model port"
+    judge_port: int | None = typer.Option(
+        None,
+        "--judge",
+        "-j",
+        help="Judge model port",
     ),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Results file"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file path"
+    output: str | None = typer.Option(None, "--output", "-o", help="Results file"),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
     ),
 ) -> None:
     """Start model, run tests, then stop model."""
@@ -500,10 +631,7 @@ def run(
         backend = "llama.cpp"
 
     config_item = {}
-    if fit:
-        config_item["fit"] = True
-    if no_offload_kv:
-        config_item["no_offload_kv"] = True
+    config_item["fit"] = fit
     if seed is not None:
         config_item["seed"] = seed
 
@@ -527,20 +655,21 @@ def run(
         try:
             # Run tests
             console.print("[cyan]Running tests...[/cyan]")
+            cats = (
+                categories.split(",")
+                if categories != "all"
+                else DEFAULT_TEST_CATEGORIES
+            )
             result_test = run_tests(
                 result.port,
                 judge_port=judge_port,
-                categories=categories.split(",") if categories != "all" else None,
+                categories=cats,
             )
 
             if output:
-                from .testing import format_markdown
-
                 Path(output).write_text(format_markdown(result_test))
                 console.print(f"[green]Results saved to {output}[/green]")
             else:
-                from rich.table import Table
-
                 table = Table(title="Test Results")
                 table.add_column("Test")
                 table.add_column("Category")
@@ -550,7 +679,7 @@ def run(
                     table.add_row(r.name, r.category, score_str)
                 console.print(table)
                 console.print(
-                    f"\n[green]Overall: {result_test.overall_score:.1f}/10[/green]"
+                    f"\n[green]Overall: {result_test.overall_score:.1f}/10[/green]",
                 )
         finally:
             # Stop model even if tests fail.
@@ -568,15 +697,16 @@ def bench(
     port: int = typer.Argument(..., help="Port of running model"),
     n_prompt: int = typer.Option(512, "-p", help="Prompt tokens"),
     n_gen: int = typer.Option(128, "-n", help="Tokens to generate"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file",
     ),
 ) -> None:
     """Run benchmark on running model via API."""
-    import json
-    import urllib.request
-
-    url = f"http://127.0.0.1:{port}/v1/completions"
+    cfg = Config(config_path)
+    url = f"http://{cfg['host']}:{port}/v1/completions"
     data = {
         "prompt": "A" * n_prompt,
         "max_tokens": n_gen,
@@ -590,8 +720,6 @@ def bench(
         data=json.dumps(data).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
-
-    import time
 
     start = time.time()
     try:
@@ -616,13 +744,14 @@ def perplexity(
     model_name: str = typer.Argument(..., help="Model name"),
     text_file: str = typer.Argument(..., help="Text file to evaluate"),
     ctx_size: int = typer.Option(4096, "--ctx", help="Context size"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", "-c", help="Config file"
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file",
     ),
 ) -> None:
     """Run perplexity benchmark on text file."""
-    import subprocess
-
     cfg = get_config(config_path)
     models = discover_models(cfg)
 
@@ -645,7 +774,7 @@ def perplexity(
 
     if not backend.exists():
         console.print(
-            "[yellow]llama-perplexity not found. Build llama.cpp first.[/yellow]"
+            "[yellow]llama-perplexity not found. Build llama.cpp first.[/yellow]",
         )
         raise typer.Exit(1)
 
@@ -661,9 +790,9 @@ def perplexity(
 
     console.print("[cyan]Running perplexity...[/cyan]")
     result = subprocess.run(args, capture_output=True, text=True)
-    print(result.stdout)
+    console.print(result.stdout)
     if result.stderr:
-        print(result.stderr)
+        console.print(result.stderr, style="red")
 
 
 @app.command()
@@ -672,11 +801,18 @@ def batch(
     start_port: int = typer.Option(11435, "--start-port", help="Starting port"),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
     output_dir: str = typer.Option(
-        "results", "--output-dir", "-o", help="Results directory"
+        "results",
+        "--output-dir",
+        "-o",
+        help="Results directory",
     ),
-    seed: int = typer.Option(42, "--seed", help="Default random seed for all batch items"),
-    config_path: Optional[str] = typer.Option(
-        None, "--config", help="Config file path"
+    seed: int = typer.Option(
+        42, "--seed", help="Default random seed for all batch items"
+    ),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        help="Config file path",
     ),
 ) -> None:
     """Run batch of models from config file.
@@ -686,13 +822,6 @@ def batch(
     - model: qwen27b, ctk: turbo3, ctv: turbo3  # with options
     - model: qwen27b, ctx: 65536  # custom context
     """
-    import time
-    from datetime import datetime
-
-    import yaml
-
-    from .testing import run_tests, save_results_csv
-
     cfg = get_config(config_path)
     models = discover_models(cfg)
 
@@ -724,24 +853,45 @@ def batch(
 
         if seed is not None and "seed" not in config_item:
             config_item["seed"] = seed
-        config_item.setdefault("no_warmup", True)
-        config_item.setdefault("cache_ram", 0)
-        config_item.setdefault("log_verbosity", 1)
-        config_item.setdefault("no_context_shift", False)
 
         if not model_name:
             continue
 
         # Find model
         model = None
+
+        # Try exact match first
         for m in models:
-            if model_name in m.name or model_name in m.path.name:
+            if model_name in (m.name, m.path.name):
                 model = m
                 break
 
+        # Fall back to case-insensitive match
         if model is None:
-            console.print(f"[red]Model not found: {model_name}[/red]")
-            continue
+            for m in models:
+                if (
+                    m.name.lower() == model_name.lower()
+                    or m.path.name.lower() == model_name.lower()
+                ):
+                    model = m
+                    break
+
+        # Last resort: substring match (with warning)
+        if model is None:
+            for m in models:
+                if (
+                    model_name.lower() in m.name.lower()
+                    or model_name.lower() in m.path.name.lower()
+                ):
+                    console.print(
+                        f"[yellow]Warning: fuzzy match for '{model_name}' -> '{m.name}'[/yellow]"
+                    )
+                    model = m
+                    break
+
+            if model is None:
+                console.print(f"[red]Model not found: {model_name}[/red]")
+                continue
 
         # Determine options
         ctk = config_item.get("ctk")
@@ -768,7 +918,7 @@ def batch(
 
         console.print(f"[cyan]=== {model.name} ===[/cyan]")
         console.print(
-            f"  Backend: {backend}, ctk={ctk or 'q8_0'}, ctv={ctv or 'q8_0'}, ctx={ctx_size}"
+            f"  Backend: {backend}, ctk={ctk or 'q8_0'}, ctv={ctv or 'q8_0'}, ctx={ctx_size}",
         )
 
         result = None
@@ -789,14 +939,16 @@ def batch(
 
             try:
                 # Run tests
-                cats = categories.split(",") if categories != "all" else None
+                cats = (
+                    categories.split(",")
+                    if categories != "all"
+                    else DEFAULT_TEST_CATEGORIES
+                )
                 test_start = time.perf_counter()
                 test_result = run_tests(result.port, categories=cats)
                 test_duration = time.perf_counter() - test_start
 
                 # Save result
-                import json
-
                 result_data = {
                     "model": model.name,
                     "backend": backend,
@@ -839,8 +991,6 @@ def batch(
         console.print("")
 
     # Save all results
-    import json
-
     results_file.write_text(json.dumps(all_results, indent=2))
     csv_file = output_path / f"batch_{timestamp}.csv"
     save_results_csv(all_results, csv_file)

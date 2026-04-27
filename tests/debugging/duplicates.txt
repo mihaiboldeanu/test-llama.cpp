@@ -2,6 +2,11 @@ Fix this code:
 
 Return duplicate values in encounter order, including repeated duplicate occurrences.
 
+If a value appears `k` times, include it `k - 1` times in the output, in the order those duplicate occurrences are encountered.
+Examples:
+- `find_duplicates([1, 1, 1]) -> [1, 1]`
+- `find_duplicates([1, 2, 2, 3, 3, 3]) -> [2, 3, 3]`
+
 ```python
 def find_duplicates(nums):
     counts = {}

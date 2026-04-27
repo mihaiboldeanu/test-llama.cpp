@@ -7,6 +7,8 @@ Rules:
 - `*` matches any sequence of characters, including empty
 - The match must cover the entire string
 - Use a dynamic-programming or greedy solution that handles long inputs correctly
+- An empty pattern only matches an empty string
+- An empty string matches only patterns made entirely of `*`
 
 Examples:
 is_wildcard_match("aa", "a") -> False

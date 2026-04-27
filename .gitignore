@@ -3,8 +3,10 @@ __pycache__/
 *.py[cod]
 *.so
 .venv/
+.ruff_cache/
 
-# test-llama
+# rama
 results/
 .pids/
 *.gguf
+.serena/

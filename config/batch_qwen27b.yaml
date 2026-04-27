@@ -1,0 +1,31 @@
+# Batch config for Qwen 27B models at 64K
+# Duplicate these entries for the quant variants you want to compare.
+
+# Normal llama.cpp KV cache
+- model: qwen27b
+  ctx: 65536
+  ctk: q8_0
+  ctv: q8_0
+
+# TurboQuant turbo3
+- model: qwen27b
+  ctx: 65536
+  ctk: turbo3
+  ctv: turbo3
+
+# TurboQuant turbo4
+- model: qwen27b
+  ctx: 65536
+  ctk: turbo4
+  ctv: turbo4
+
+# Mixed KV cache
+- model: qwen27b
+  ctx: 65536
+  ctk: q8_0
+  ctv: turbo3
+
+- model: qwen27b
+  ctx: 65536
+  ctk: q8_0
+  ctv: turbo4

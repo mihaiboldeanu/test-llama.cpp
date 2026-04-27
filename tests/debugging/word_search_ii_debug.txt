@@ -2,6 +2,9 @@ Fix this code.
 
 Return all distinct dictionary words found in the board.
 
+If `board` is empty or `words` is empty, return `[]`.
+The same word should appear at most once in the output even if it is listed multiple times in `words`.
+
 ```python
 class TrieNode:
     def __init__(self):

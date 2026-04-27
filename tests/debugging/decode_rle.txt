@@ -1,6 +1,19 @@
 Fix this code:
 
-Counts may be multi-digit, leading zeros are allowed, and malformed input should raise `ValueError`.
+The format is `count` followed by `character`.
+
+Examples:
+- `decode_rle("3a2b1c") -> "aaabbc"`
+- `decode_rle("01a") -> "a"`
+- `decode_rle("3a0b") -> "aaa"`
+
+Rules:
+- Every character must be preceded by at least one digit
+- Counts may be multi-digit
+- Leading zeros are allowed
+- A count of `0` means the character is omitted
+- An empty string returns `""`
+- Any deviation from the format, including a missing count or stray digits, raises `ValueError`
 
 ```python
 def decode_rle(s):

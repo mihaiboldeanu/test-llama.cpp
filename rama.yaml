@@ -1,4 +1,4 @@
-# test-llama configuration
+# rama configuration
 
 # Paths
 model_dir: ~/ollama
@@ -24,7 +24,16 @@ min_p: 0.0
 repeat_penalty: 1.0
 presence_penalty: 0.0
 seed: null
-chat_template_kwargs: '{"preserver_thinking": true}'
+chat_template_kwargs: '{"preserve_thinking": true}'
+
+# Speculative decoding
+spec_type: ngram-mod
+spec_ngram_size_n: 16
+draft_min: 8
+draft_max: 24
+
+# Default context size when auto-calculating
+default_ctx: 131072
 
 # Server settings
 default_port: 11435
@@ -34,7 +43,7 @@ port_range_end: 11500
 families:
   qwen:
     max_ctx: 262144
-    preferred_ctx: 65536
+    preferred_ctx: 131072
 
   gemma:
     max_ctx: 131072
