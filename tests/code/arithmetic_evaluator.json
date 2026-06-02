@@ -1,0 +1,18 @@
+{
+  "prompt": "Implement:\n\ndef evaluate(expr: str) -> int:\n\nRequirements:\n- support `+`, `-`, `*`, `/`\n- support parentheses\n- support unary minus\n- respect operator precedence\n- division truncates toward zero\n- spaces may appear anywhere and must be ignored\n- no `eval()` or `exec()`\n\nExamples:\nevaluate(\"-3 + 5\") -> 2\nevaluate(\"2*(-3 + 4)\") -> 2\nevaluate(\"18 / (3 + 1)\") -> 4\nevaluate(\"7 + -(2*3)\") -> 1\n\nReturn only Python code.\n",
+  "function_name": "evaluate",
+  "setup_code": "",
+  "test_script": "print(evaluate(\"-3 + 5\"))\nprint(evaluate(\"2*(-3 + 4)\"))\nprint(evaluate(\"18 / (3 + 1)\"))\nprint(evaluate(\"7 + -(2*3)\"))\nprint(evaluate(\"-(1 + 2) * 3\"))\nprint(evaluate(\"14 / 3\"))\nprint(evaluate(\"14 / -3\"))\nprint(evaluate(\"-14 / 3\"))\nprint(evaluate(\"(-2)*(-3) + 4\"))\nprint(evaluate(\"1 - -2 * (3 + 4)\"))",
+  "expected_output": [
+    "2",
+    "2",
+    "4.5",
+    "1",
+    "-9",
+    "4.666666666666667",
+    "-4.666666666666667",
+    "-4.666666666666667",
+    "10",
+    "15"
+  ]
+}

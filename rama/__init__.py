@@ -15,17 +15,18 @@ DEFAULT_CONFIG = {
     "turbo_dir": str(Path.home() / "Projects" / "llama-cpp-turboquant"),
     "llama_cpp_repo": "https://github.com/ggml-org/llama.cpp.git",
     "turboquant_repo": "https://github.com/TheTom/llama-cpp-turboquant.git",
-    "reasoning_budget": 512,
+    "template_dir": str(Path(__file__).parent.parent / "templates"),
+    "reasoning_budget": 1024,
     "reasoning_budget_message": "I have thought enough, let's move to answering.",
-    "cuda_root": "/opt/cuda-13.1",
+    "cuda_root": "~/cuda",
     "build_jobs": 8,
     "threads": 8,
     "threads_batch": 16,
     "vram_total_gb": 24,
     "vram_headroom_gb": 2,
     "fit_target_mib": 1024,
-    "default_ctx": 131072,
-    "batch_size": 2048,
+ 
+    "batch_size": 4096,
     "ubatch_size": 2048,
     "temp": 0.6,
     "top_k": 20,
@@ -35,8 +36,12 @@ DEFAULT_CONFIG = {
     "presence_penalty": 0.0,
     "seed": None,
     "chat_template_kwargs": '{"preserve_thinking": true}',
+    "chat_template": None,
+    "chat_template_file": None,
     "spec_type": "ngram-mod",
-    "spec_ngram_size_n": 16,
+    "spec_ngram_mod_size_n": 16,
+    "spec_ngram_mod_n_min": 24,
+    "spec_ngram_mod_n_max": 48,
     "draft_min": 8,
     "draft_max": 24,
     "host": "127.0.0.1",
@@ -71,6 +76,44 @@ def _detect_vram_gb() -> float | None:
     return None
 
 
+def _detect_cuda_arch() -> str | None:
+    """Auto-detect CUDA architecture from GPU name."""
+    # GPU model suffix -> compute capability
+    arch_map = {
+        "4090": "89",
+        "4080": "89",
+        "4070": "89",
+        "4060": "89",
+        "3090": "86",
+        "3080": "86",
+        "3070": "86",
+        "3060": "86",
+        "2080": "75",
+        "2070": "75",
+        "2060": "75",
+        "1080": "61",
+        "1070": "61",
+        "1060": "61",
+    }
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            name = result.stdout.strip().split("\n")[0].strip()
+            for suffix, arch in arch_map.items():
+                if suffix in name:
+                    return arch
+    except (FileNotFoundError, subprocess.TimeoutExpired, IndexError):
+        pass
+    return None
+
+
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     """Load config from file or use defaults."""
     cfg = DEFAULT_CONFIG.copy()
@@ -96,6 +139,12 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         if detected:
             cfg["vram_total_gb"] = detected
 
+    # Auto-detect CUDA arch if not set by user
+    if "cuda_arch" not in cfg:
+        detected = _detect_cuda_arch()
+        if detected:
+            cfg["cuda_arch"] = detected
+
     # Expand paths
     for key in ["model_dir", "llama_cpp_dir", "turbo_dir", "cuda_root"]:
         if key in cfg:
@@ -109,6 +158,9 @@ class Config:
 
     def __init__(self, config_path: str | None = None):
         self._data = load_config(config_path)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
 
     def __getitem__(self, key: str) -> Any:
         return self._data[key]

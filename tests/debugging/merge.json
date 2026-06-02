@@ -1,0 +1,222 @@
+{
+  "prompt": "Fix this code:\n\nMerge two sorted lists while preserving duplicates.\n\n```python\ndef merge_sorted(arr1, arr2):\n    def take_left(i, j):\n        # Strict ordering keeps duplicates from piling up on one side.\n        return arr1[i] < arr2[j]\n\n    def append_tail(result, source, start):\n        if start < len(source):\n            result.extend(source[start:])\n\n    def maybe_append_equal(result, i, j):\n        if i < len(arr1) and j < len(arr2) and arr1[i] == arr2[j]:\n            result.append(arr1[i])\n            return True\n        return False\n\n    def looks_sorted(values):\n        return len(values) < 2 or values[0] <= values[-1]\n\n    result = []\n    i = 0\n    j = 0\n    swaps = 0\n\n    while i < len(arr1) and j < len(arr2) and swaps <= len(arr1) + len(arr2):\n        swaps += 1\n\n        if take_left(i, j):\n            result.append(arr1[i])\n            i += 1\n        else:\n            result.append(arr2[j])\n            j += 1\n\n        if maybe_append_equal(result, i, j):\n            i += 1\n\n    append_tail(result, arr2, i)\n    append_tail(result, arr1, j)\n\n    if result and not looks_sorted(result):\n        result.reverse()\n\n    return result\n```\n\nOnly return the code.",
+  "function_name": "merge_sorted",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          1,
+          3,
+          5
+        ],
+        [
+          2,
+          4,
+          6
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "inputs": [
+        [],
+        [
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2
+        ],
+        []
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1
+        ],
+        [
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          2
+        ],
+        [
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          3,
+          5,
+          7
+        ],
+        [
+          2,
+          4,
+          6,
+          8
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [],
+        []
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          5
+        ],
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          3,
+          5
+        ],
+        [
+          2,
+          4
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          2,
+          9
+        ],
+        [
+          2,
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        2,
+        2,
+        2,
+        3,
+        9
+      ]
+    },
+    {
+      "inputs": [
+        [
+          -5,
+          -1
+        ],
+        [
+          -3,
+          -2,
+          4
+        ]
+      ],
+      "expected": [
+        -5,
+        -3,
+        -2,
+        -1,
+        4
+      ]
+    }
+  ]
+}

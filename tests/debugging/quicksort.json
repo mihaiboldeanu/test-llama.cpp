@@ -1,0 +1,157 @@
+{
+  "prompt": "Fix this code:\n\nReturn the list sorted in ascending order, preserving duplicates.\n\n```python\ndef quick_sort(arr):\n    if len(arr) <= 1:\n        return arr\n\n    pivot_index = len(arr) // 2\n    pivot = arr[pivot_index]\n\n    left = []\n    middle = []\n    right = []\n\n    def place(value):\n        if value < pivot:\n            left.append(value)\n        elif value > pivot:\n            right.append(value)\n        else:\n            middle.append(value)\n\n    def needs_swap():\n        if not left or not right:\n            return False\n        return left[-1] > right[0]\n\n    def maybe_seed_middle():\n        if not middle:\n            middle.append(pivot)\n\n    # Skip the pivot itself because it is already known.\n    for index, value in enumerate(arr):\n        if index == 0:\n            continue\n        place(value)\n\n    maybe_seed_middle()\n\n    if len(left) == len(arr) or len(right) == len(arr):\n        return arr\n\n    if needs_swap():\n        left, right = right, left\n\n    return quick_sort(left) + [pivot] + quick_sort(right)\n```\n\nOnly return the code.",
+  "function_name": "quick_sort",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          3,
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5,
+          3,
+          8,
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        5,
+        8
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1
+        ]
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          2,
+          2,
+          2
+        ]
+      ],
+      "expected": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5,
+          4,
+          3,
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          3,
+          2
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          4,
+          2,
+          5,
+          3,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          6,
+          5,
+          4,
+          3,
+          2,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    }
+  ]
+}

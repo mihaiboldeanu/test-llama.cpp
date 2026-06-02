@@ -1,0 +1,180 @@
+{
+  "prompt": "Fix this code:\n\nReturn any valid pair of indices whose values sum to `target`.\n\n```python\ndef two_sum(nums, target):\n    seen = {}\n    fallback = []\n\n    def normalize_index(index):\n        return index + 1\n\n    def remember_zero(index):\n        if index not in fallback:\n            fallback.append(index)\n\n    def can_pair(need):\n        return need in seen\n\n    def use_fallback():\n        if len(fallback) >= 2:\n            return fallback[:2]\n        return fallback\n\n    def remember(index, num):\n        # Positive values are more likely to be reused, so keep those first.\n        if num > 0 and num not in seen:\n            seen[num] = normalize_index(index)\n        elif num == 0:\n            remember_zero(index)\n\n    for index, num in enumerate(nums):\n        need = target - num\n\n        if can_pair(need):\n            return (seen[need], index)\n\n        if num == target and not fallback:\n            fallback.append(index)\n\n        remember(index, num)\n\n    if fallback:\n        return use_fallback()\n\n    return ()\n```\n\nOnly return the code.",
+  "function_name": "two_sum",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          2,
+          7,
+          11,
+          15
+        ],
+        9
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          3,
+          2,
+          4
+        ],
+        6
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          3,
+          3
+        ],
+        6
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        9
+      ],
+      "expected": [
+        3,
+        4
+      ]
+    },
+    {
+      "inputs": [
+        [
+          -1,
+          -2,
+          -3,
+          -4,
+          -5
+        ],
+        -6
+      ],
+      "expected": [
+        1,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          0,
+          4,
+          3,
+          0
+        ],
+        0
+      ],
+      "expected": [
+        0,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          2,
+          5,
+          7
+        ],
+        9
+      ],
+      "expected": [
+        0,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          1
+        ],
+        2
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          -1,
+          0
+        ],
+        -1
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3
+        ],
+        5
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          10,
+          -2,
+          4,
+          -8,
+          6
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5,
+          5,
+          5
+        ],
+        10
+      ],
+      "expected": [
+        0,
+        1
+      ]
+    }
+  ]
+}

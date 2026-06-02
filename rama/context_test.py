@@ -116,11 +116,26 @@ def run_needle_test(
     text_file: Path,
     needle_loc: str,
     seed: int | None = None,
+    host: str = "127.0.0.1",
+    max_tokens: int | None = None,
 ) -> ContextTestResult:
     """Run a single needle-in-haystack test."""
     from .testing import run_chat_completion
 
     content = text_file.read_text()
+
+    # Truncate content to fit within max_tokens (leaving room for prompt overhead)
+    if max_tokens:
+        # Reserve ~100 tokens for the prompt/question wrapper
+        max_content_tokens = max_tokens - 100
+        # Rough estimate: 1 token ≈ 4 chars
+        max_content_chars = max_content_tokens * 4
+        content = content[:max_content_chars]
+        # Truncate at last sentence boundary
+        last_period = content.rfind(".")
+        if last_period > max_content_chars // 2:
+            content = content[: last_period + 1]
+
     needle = generate_needle(seed)
     haystack = insert_needle(content, needle, needle_loc)
     prompt = build_prompt(haystack, needle)
@@ -131,6 +146,7 @@ def run_needle_test(
         temperature=0.0,
         max_tokens=256,
         seed=seed if seed is not None else 42,
+        host=host,
     )
 
     has_repetition = check_for_repetition(response)
@@ -158,29 +174,43 @@ def run_needle_suite(
     text_files: list[Path],
     needle_locs: list[str],
     seed: int | None = None,
+    host: str = "127.0.0.1",
+    max_tokens: int | None = None,
+    quiet: bool = False,
 ) -> list[ContextTestResult]:
     """Run needle tests at various locations."""
     results = []
 
     for text_file in text_files:
-        console.print(
-            f"\n[cyan]Testing with {text_file.name} ({len(text_file.read_text()) // 4:,} est. tokens)...[/cyan]"
-        )
+        content = text_file.read_text()
+        if not quiet:
+            if max_tokens:
+                console.print(
+                    f"\n[cyan]Testing with {text_file.name} ({len(content) // 4:,} tokens -> {max_tokens:,} max)...[/cyan]"
+                )
+            else:
+                console.print(
+                    f"\n[cyan]Testing with {text_file.name} ({len(content) // 4:,} est. tokens)...[/cyan]"
+                )
 
         for loc in needle_locs:
-            console.print(f"  Needle at {loc}...", end=" ")
+            if not quiet:
+                console.print(f"  Needle at {loc}...", end=" ")
 
-            result = run_needle_test(port, text_file, loc, seed=seed)
+            result = run_needle_test(
+                port, text_file, loc, seed=seed, host=host, max_tokens=max_tokens
+            )
             results.append(result)
 
-            if result.is_looping:
-                console.print("[red]LOOPING[/red]")
-            elif result.has_repetition:
-                console.print("[yellow]REPETITION[/yellow]")
-            elif result.found:
-                console.print("[green]FOUND[/green]")
-            else:
-                console.print(f"[red]MISSED (got: {result.response[:60]})[/red]")
+            if not quiet:
+                if result.is_looping:
+                    console.print("[red]LOOPING[/red]")
+                elif result.has_repetition:
+                    console.print("[yellow]REPETITION[/yellow]")
+                elif result.found:
+                    console.print("[green]FOUND[/green]")
+                else:
+                    console.print(f"[red]MISSED (got: {result.response[:60]})[/red]")
 
     return results
 

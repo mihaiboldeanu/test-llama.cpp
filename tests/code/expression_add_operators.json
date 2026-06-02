@@ -1,0 +1,13 @@
+{
+  "prompt": "Insert operators between digits to reach a target.\n\ndef add_operators(num: str, target: int) -> list[str]:\n\nRequirements:\n- Insert `+`, `-`, `*` between digits of `num`\n- Return all expressions that evaluate to `target`\n- Do not reorder digits\n- Numbers in expressions cannot have leading zeros unless the number itself is `0`\n- Multiplication must respect precedence over + and -\n- Return results in any order\n\nExamples:\nadd_operators(\"123\", 6) -> [\"1+2+3\", \"1*2*3\"]\nadd_operators(\"232\", 8) -> [\"2*3+2\", \"2+3*2\"]\nadd_operators(\"105\", 5) -> [\"1*0+5\", \"10-5\"]\nadd_operators(\"00\", 0) -> [\"0+0\", \"0-0\", \"0*0\"]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "add_operators",
+  "setup_code": "",
+  "test_script": "cases = [\n    (\"123\", 6),\n    (\"232\", 8),\n    (\"105\", 5),\n    (\"00\", 0),\n    (\"3456237490\", 9191),\n]\nfor num, target in cases:\n    print(add_operators(num, target))",
+  "expected_output": [
+    "['1+2+3', '1*2*3']",
+    "['2+3*2', '2*3+2']",
+    "['10-5', '1*0+5']",
+    "['0+0', '0-0', '0*0']",
+    "[]"
+  ]
+}

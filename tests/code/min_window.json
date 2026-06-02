@@ -1,0 +1,14 @@
+{
+  "prompt": "Find the minimum window substring.\n\ndef min_window(s: str, t: str) -> str:\n\nRequirements:\n- Return the smallest substring of `s` that contains all characters from `t`\n- Characters in `t` may repeat and must be matched with multiplicity\n- Return an empty string if no such window exists\n\nExamples:\nmin_window(\"ADOBECODEBANC\", \"ABC\") -> \"BANC\"\nmin_window(\"a\", \"a\") -> \"a\"\nmin_window(\"a\", \"aa\") -> \"\"\nmin_window(\"bba\", \"ab\") -> \"ba\"\n\nReturn only Python code, no explanation.\n",
+  "function_name": "min_window",
+  "setup_code": "",
+  "test_script": "print(min_window(\"ADOBECODEBANC\", \"ABC\"))\nprint(min_window(\"a\", \"a\"))\nprint(min_window(\"a\", \"aa\"))\nprint(min_window(\"aa\", \"aa\"))\nprint(min_window(\"bba\", \"ab\"))\nprint(min_window(\"cabwefgewcwaefgcf\", \"cae\"))\nprint(min_window(\"anything\", \"\"))",
+  "expected_output": [
+    "BANC",
+    "a",
+    "",
+    "aa",
+    "ba",
+    "cwae"
+  ]
+}

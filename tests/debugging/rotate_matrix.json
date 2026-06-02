@@ -1,0 +1,83 @@
+{
+  "prompt": "Fix this code:\n\nRotate an n x n matrix 90 degrees clockwise in place.\n\n```python\ndef rotate(matrix):\n    n = len(matrix)\n    for i in range(n):\n        for j in range(n):\n            matrix[i][j], matrix[j][i] = matrix[j][i], matrix[i][j]\n\n    for row in matrix:\n        row = row[::-1]\n```\n\nOnly return the code.",
+  "function_name": "rotate",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          2
+        ]
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          7,
+          4,
+          1
+        ],
+        [
+          8,
+          5,
+          2
+        ],
+        [
+          9,
+          6,
+          3
+        ]
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1
+        ]
+      ]
+    }
+  ]
+}

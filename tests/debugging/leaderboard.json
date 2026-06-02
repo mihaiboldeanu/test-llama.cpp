@@ -1,0 +1,13 @@
+{
+  "prompt": "Fix this code.\n\nGoal:\nTrack player scores.\n- `add_score(player, delta)` increases score\n- `top(k)` returns player names sorted by:\n  1. score descending\n  2. name ascending for ties\n\n```python\nclass Leaderboard:\n    def __init__(self):\n        self.scores = {}\n\n    def add_score(self, player, delta):\n        if player not in self.scores:\n            self.scores[player] = 0\n        self.scores[player] = delta\n\n    def top(self, k):\n        items = list(self.scores.items())\n        items.sort(key=lambda x: (x[1], x[0]))\n        return [name for name, _ in items[:k]]\n```\n\nExample:\n```python\nlb = Leaderboard()\nlb.add_score(\"bob\", 5)\nlb.add_score(\"alice\", 5)\nlb.add_score(\"bob\", 2)\nlb.add_score(\"carol\", 9)\n\nlb.top(2)   # [\"carol\", \"bob\"]\nlb.top(10)  # [\"carol\", \"bob\", \"alice\"]\n```\n\nReturn only Python code.",
+  "function_name": "Leaderboard",
+  "setup_code": "",
+  "test_script": "lb = Leaderboard()\nlb.add_score(\"bob\", 5)\nlb.add_score(\"alice\", 5)\nlb.add_score(\"bob\", 2)\nlb.add_score(\"carol\", 9)\nlb.add_score(\"dave\", 7)\nprint(lb.top(2))\nprint(lb.top(10))\nlb.add_score(\"alice\", 4)\nprint(lb.top(3))\nprint(lb.top(0))\nlb.add_score(\"erin\", 7)\nprint(lb.top(4))",
+  "expected_output": [
+    "['carol', 'bob']",
+    "['carol', 'bob', 'dave', 'alice']",
+    "['alice', 'carol', 'bob']",
+    "[]",
+    "['alice', 'carol', 'bob', 'dave']"
+  ]
+}

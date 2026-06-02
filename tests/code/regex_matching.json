@@ -1,0 +1,15 @@
+{
+  "prompt": "Implement regular expression matching for `.` and `*`.\n\ndef is_match(s: str, p: str) -> bool:\n\nRules:\n- `.` matches any single character\n- `*` matches zero or more of the preceding element\n- The match must cover the entire string\n\nExamples:\nis_match(\"aa\", \"a\") -> False\nis_match(\"aa\", \"a*\") -> True\nis_match(\"ab\", \".*\") -> True\nis_match(\"aab\", \"c*a*b\") -> True\nis_match(\"mississippi\", \"mis*is*p*.\") -> False\n\nReturn only Python code, no explanation.\n",
+  "function_name": "is_match",
+  "setup_code": "",
+  "test_script": "print(is_match(\"aa\", \"a\"))\nprint(is_match(\"aa\", \"a*\"))\nprint(is_match(\"ab\", \".*\"))\nprint(is_match(\"aab\", \"c*a*b\"))\nprint(is_match(\"mississippi\", \"mis*is*p*.\"))\nprint(is_match(\"ab\", \".*c\"))\nprint(is_match(\"aaa\", \"ab*a*c*a\"))",
+  "expected_output": [
+    "False",
+    "True",
+    "True",
+    "True",
+    "False",
+    "False",
+    "True"
+  ]
+}

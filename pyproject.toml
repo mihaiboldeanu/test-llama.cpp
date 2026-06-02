@@ -16,7 +16,7 @@ rama = "rama.__main__:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Ruff config
+[tool.ruff]
 root = true
 
 [tool.ruff.lint]

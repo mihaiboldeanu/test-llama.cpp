@@ -1,0 +1,14 @@
+{
+  "prompt": "Remove the minimum number of invalid parentheses and return all valid results.\n\ndef remove_invalid_parentheses(s: str) -> list[str]:\n\nRequirements:\n- Remove the fewest parentheses possible\n- Return every distinct valid string obtainable with the minimum removals\n- Preserve the relative order of all non-removed characters\n- The result may be returned in any order\n\nExamples:\nremove_invalid_parentheses(\"()())()\") -> [\"(())()\", \"()()()\"]\nremove_invalid_parentheses(\"(a)())()\") -> [\"(a())()\", \"(a)()()\"]\nremove_invalid_parentheses(\")(\") -> [\"\"]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "remove_invalid_parentheses",
+  "setup_code": "",
+  "test_script": "print(sorted(remove_invalid_parentheses(\"()())()\")))\nprint(sorted(remove_invalid_parentheses(\"(a)())()\")))\nprint(sorted(remove_invalid_parentheses(\")(\")))\nprint(sorted(remove_invalid_parentheses(\"n\")))\nprint(sorted(remove_invalid_parentheses(\"(((\")))\nprint(sorted(remove_invalid_parentheses(\"()v)\")))",
+  "expected_output": [
+    "['(())()', '()()()']",
+    "['(a())()', '(a)()()']",
+    "['']",
+    "['n']",
+    "['']",
+    "['()v', '(v)']"
+  ]
+}

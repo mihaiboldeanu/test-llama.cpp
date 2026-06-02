@@ -1,0 +1,15 @@
+{
+  "prompt": "Count the number of distinct subsequences of `s` that equal `t`.\n\ndef num_distinct(s: str, t: str) -> int:\n\nRequirements:\n- Count distinct ways to delete characters from `s` to form `t`\n- Return 0 if `t` cannot be formed\n- Handle empty-string edge cases correctly\n- Use a dynamic-programming solution\n\nExamples:\nnum_distinct(\"rabbbit\", \"rabbit\") -> 3\nnum_distinct(\"babgbag\", \"bag\") -> 5\nnum_distinct(\"\", \"\") -> 1\n\nReturn only Python code, no explanation.\n",
+  "function_name": "num_distinct",
+  "setup_code": "",
+  "test_script": "print(num_distinct(\"rabbbit\", \"rabbit\"))\nprint(num_distinct(\"babgbag\", \"bag\"))\nprint(num_distinct(\"\", \"\"))\nprint(num_distinct(\"abc\", \"\"))\nprint(num_distinct(\"\", \"a\"))\nprint(num_distinct(\"aaaaa\", \"aa\"))\nprint(num_distinct(\"ABCDE\", \"ACE\"))",
+  "expected_output": [
+    "3",
+    "5",
+    "1",
+    "1",
+    "0",
+    "10",
+    "1"
+  ]
+}

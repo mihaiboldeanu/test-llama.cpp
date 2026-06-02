@@ -4,9 +4,23 @@ __pycache__/
 *.so
 .venv/
 .ruff_cache/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# AI assistants
+.serena/
+.opencode/
 
 # rama
 results/
 .pids/
 *.gguf
-.serena/
+wikitext-2/
+config/batch_large.yaml
+config/batch_ppl.yaml
+config/batch_small.yaml
+
+# Build
+build/
+*.log

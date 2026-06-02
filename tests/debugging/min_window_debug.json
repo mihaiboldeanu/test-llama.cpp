@@ -1,0 +1,56 @@
+{
+  "prompt": "Fix this code.\n\nReturn the minimum window substring.\n\nIf `t` is empty, return `\"\"`.\nIf no valid window exists, return `\"\"`.\n\n```python\ndef min_window(s, t):\n    need = {}\n    for ch in t:\n        need[ch] = need.get(ch, 0) + 1\n\n    have = {}\n    formed = 0\n    required = len(need)\n    left = 0\n    best = \"\"\n\n    for right in range(len(s)):\n        ch = s[right]\n        have[ch] = have.get(ch, 0) + 1\n        if ch in need and have[ch] >= need[ch]:\n            formed += 1\n\n        while formed == required:\n            window = s[left:right+1]\n            if best == \"\" or len(window) < len(best):\n                best = window\n\n            have[s[left]] -= 1\n            if s[left] in need and have[s[left]] <= need[s[left]]:\n                formed -= 1\n            left += 1\n\n    return best\n```\n\nOnly return the code.",
+  "function_name": "min_window",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        "ADOBECODEBANC",
+        "ABC"
+      ],
+      "expected": "BANC"
+    },
+    {
+      "inputs": [
+        "a",
+        "a"
+      ],
+      "expected": "a"
+    },
+    {
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "expected": ""
+    },
+    {
+      "inputs": [
+        "aa",
+        "a"
+      ],
+      "expected": "a"
+    },
+    {
+      "inputs": [
+        "aa",
+        "aa"
+      ],
+      "expected": "aa"
+    },
+    {
+      "inputs": [
+        "abc",
+        "abc"
+      ],
+      "expected": "abc"
+    },
+    {
+      "inputs": [
+        "abc",
+        "abcd"
+      ],
+      "expected": ""
+    }
+  ]
+}

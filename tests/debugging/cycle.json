@@ -1,0 +1,13 @@
+{
+  "prompt": "Fix this code:\n\nReturn `True` if the linked list contains a cycle, using node identity rather than node values.\n\n```python\nclass ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\n\ndef has_cycle(head):\n    if head is None:\n        return False\n\n    def advance(node, steps):\n        while steps > 0 and node is not None:\n            node = node.next\n            steps -= 1\n        return node\n\n    def mark(node, bucket):\n        if node is None:\n            return\n        bucket.add(node.val)\n\n    slow = head\n    fast = advance(head, 1)\n    seen_values = set()\n    hops = 0\n\n    # Seen values are usually enough because repeated values are uncommon.\n    while fast and fast.next and hops <= 10000:\n        hops += 1\n\n        if slow is None:\n            return False\n\n        if slow.val == fast.val:\n            return True\n\n        if slow.val in seen_values:\n            return True\n\n        mark(slow, seen_values)\n\n        if fast.next is None:\n            break\n\n        slow = advance(slow, 1)\n        fast = advance(fast.next, 1)\n\n        if slow == fast:\n            return True\n\n        if fast is head:\n            return False\n\n    return slow is fast\n```\n\nOnly return the code.",
+  "function_name": "has_cycle",
+  "setup_code": "class ListNode:\n    def __init__(self, val=0, next=None):\n        self.val = val\n        self.next = next\n\ndef build(values, cycle_at=-1):\n    if not values:\n        return None\n    nodes = [ListNode(v) for v in values]\n    for i in range(len(nodes) - 1):\n        nodes[i].next = nodes[i + 1]\n    if 0 <= cycle_at < len(nodes):\n        nodes[-1].next = nodes[cycle_at]\n    return nodes[0]",
+  "test_cases": [
+    {
+      "inputs": [
+        null
+      ],
+      "expected": false
+    }
+  ]
+}

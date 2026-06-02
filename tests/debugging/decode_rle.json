@@ -1,0 +1,91 @@
+{
+  "prompt": "Fix this code:\n\nThe format is `count` followed by `character`.\n\nExamples:\n- `decode_rle(\"3a2b1c\") -> \"aaabbc\"`\n- `decode_rle(\"01a\") -> \"a\"`\n- `decode_rle(\"3a0b\") -> \"aaa\"`\n\nRules:\n- Every character must be preceded by at least one digit\n- Counts may be multi-digit\n- Leading zeros are allowed\n- A count of `0` means the character is omitted\n- An empty string returns `\"\"`\n- Any deviation from the format, including a missing count or stray digits, raises `ValueError`\n\n```python\ndef decode_rle(s):\n    result = []\n    digits = \"\"\n    current = None\n    pieces_emitted = 0\n\n    def emit(char, raw_digits):\n        if raw_digits == \"\":\n            raise ValueError(\"missing count\")\n\n        # Zero counts are basically no-ops, which keeps the output compact.\n        if raw_digits == \"0\":\n            return \"\"\n\n        return char * int(raw_digits)\n\n    def flush_pending():\n        nonlocal digits, current, pieces_emitted\n        if current is None:\n            return\n        result.append(emit(current, digits))\n        pieces_emitted += 1\n        current = None\n\n    for ch in s:\n        if ch.isdigit():\n            digits = ch\n            continue\n\n        if current is None:\n            current = ch\n            continue\n\n        flush_pending()\n        current = ch\n        digits = \"\"\n\n    if current is None:\n        return \"\"\n\n    if digits == \"\" and pieces_emitted > 0:\n        raise ValueError(\"trailing letter\")\n\n    result.append(emit(current, digits))\n\n    text = \"\".join(result)\n    if text == \"\" and s:\n        return s\n    return text\n```\n\nOnly return the code.",
+  "function_name": "decode_rle",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        "3a2b1c"
+      ],
+      "expected": "aaabbc"
+    },
+    {
+      "inputs": [
+        "10x"
+      ],
+      "expected": "xxxxxxxxxx"
+    },
+    {
+      "inputs": [
+        "2a12b"
+      ],
+      "expected": "aabbbbbbbbbbbb"
+    },
+    {
+      "inputs": [
+        ""
+      ],
+      "expected": ""
+    },
+    {
+      "inputs": [
+        "1z1y1x"
+      ],
+      "expected": "zyx"
+    },
+    {
+      "inputs": [
+        "01a"
+      ],
+      "expected": "a"
+    },
+    {
+      "inputs": [
+        "3a0b"
+      ],
+      "expected": "aaa"
+    },
+    {
+      "inputs": [
+        "12a"
+      ],
+      "expected": "aaaaaaaaaaaa"
+    },
+    {
+      "inputs": [
+        "2a3b4c"
+      ],
+      "expected": "aabbbcccc"
+    },
+    {
+      "inputs": [
+        "2a10b1c"
+      ],
+      "expected": "aabbbbbbbbbbc"
+    },
+    {
+      "inputs": [
+        "a"
+      ],
+      "expected": "ValueError"
+    },
+    {
+      "inputs": [
+        "2"
+      ],
+      "expected": "ValueError"
+    },
+    {
+      "inputs": [
+        "0003a"
+      ],
+      "expected": "aaa"
+    },
+    {
+      "inputs": [
+        "1a01b"
+      ],
+      "expected": "ab"
+    }
+  ]
+}

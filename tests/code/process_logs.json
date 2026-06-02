@@ -1,0 +1,310 @@
+{
+  "prompt": "Implement:\n\ndef process_logs(logs: list[dict]) -> list[dict]:\n\nEach log:\n{\n  \"id\": str,\n  \"timestamp\": int,\n  \"value\": int\n}\n\nRules:\n- Remove duplicate ids, keeping the first occurrence\n- Sort by timestamp ascending\n- If timestamps are equal, preserve original order\n- Add field `delta`:\n  difference from previous value in sorted order\n  first element has delta = 0\n\nExample input:\n[\n  {\"id\":\"a\",\"timestamp\":2,\"value\":10},\n  {\"id\":\"b\",\"timestamp\":1,\"value\":5},\n  {\"id\":\"a\",\"timestamp\":3,\"value\":20}\n]\n\nExpected output:\n[\n  {\"id\":\"b\",\"timestamp\":1,\"value\":5,\"delta\":0},\n  {\"id\":\"a\",\"timestamp\":2,\"value\":10,\"delta\":5}\n]\n\nReturn only Python code.\n",
+  "function_name": "process_logs",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          {
+            "id": "a",
+            "timestamp": 2,
+            "value": 10
+          },
+          {
+            "id": "b",
+            "timestamp": 1,
+            "value": 5
+          },
+          {
+            "id": "a",
+            "timestamp": 3,
+            "value": 20
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "b",
+          "timestamp": 1,
+          "value": 5,
+          "delta": 0
+        },
+        {
+          "id": "a",
+          "timestamp": 2,
+          "value": 10,
+          "delta": 5
+        }
+      ]
+    },
+    {
+      "inputs": [
+        [
+          {
+            "id": "x",
+            "timestamp": 5,
+            "value": 7
+          },
+          {
+            "id": "y",
+            "timestamp": 5,
+            "value": 2
+          },
+          {
+            "id": "z",
+            "timestamp": 6,
+            "value": 4
+          },
+          {
+            "id": "y",
+            "timestamp": 1,
+            "value": 100
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "x",
+          "timestamp": 5,
+          "value": 7,
+          "delta": 0
+        },
+        {
+          "id": "y",
+          "timestamp": 5,
+          "value": 2,
+          "delta": -5
+        },
+        {
+          "id": "z",
+          "timestamp": 6,
+          "value": 4,
+          "delta": 2
+        }
+      ]
+    },
+    {
+      "inputs": [
+        [
+          {
+            "id": "n1",
+            "timestamp": 9,
+            "value": 10
+          },
+          {
+            "id": "n2",
+            "timestamp": 9,
+            "value": 4
+          },
+          {
+            "id": "n3",
+            "timestamp": 8,
+            "value": 6
+          },
+          {
+            "id": "n4",
+            "timestamp": 9,
+            "value": 9
+          },
+          {
+            "id": "n2",
+            "timestamp": 0,
+            "value": 999
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "n3",
+          "timestamp": 8,
+          "value": 6,
+          "delta": 0
+        },
+        {
+          "id": "n1",
+          "timestamp": 9,
+          "value": 10,
+          "delta": 4
+        },
+        {
+          "id": "n2",
+          "timestamp": 9,
+          "value": 4,
+          "delta": -6
+        },
+        {
+          "id": "n4",
+          "timestamp": 9,
+          "value": 9,
+          "delta": 5
+        }
+      ]
+    },
+    {
+      "inputs": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          {
+            "id": "s1",
+            "timestamp": 1,
+            "value": 5
+          },
+          {
+            "id": "s2",
+            "timestamp": 1,
+            "value": 7
+          },
+          {
+            "id": "s3",
+            "timestamp": 2,
+            "value": 9
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "s1",
+          "timestamp": 1,
+          "value": 5,
+          "delta": 0
+        },
+        {
+          "id": "s2",
+          "timestamp": 1,
+          "value": 7,
+          "delta": 2
+        },
+        {
+          "id": "s3",
+          "timestamp": 2,
+          "value": 9,
+          "delta": 2
+        }
+      ]
+    },
+    {
+      "inputs": [
+        [
+          {
+            "id": "d",
+            "timestamp": 3,
+            "value": 10
+          },
+          {
+            "id": "e",
+            "timestamp": 2,
+            "value": 4
+          },
+          {
+            "id": "d",
+            "timestamp": 1,
+            "value": 99
+          },
+          {
+            "id": "f",
+            "timestamp": 2,
+            "value": 6
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "e",
+          "timestamp": 2,
+          "value": 4,
+          "delta": 0
+        },
+        {
+          "id": "f",
+          "timestamp": 2,
+          "value": 6,
+          "delta": 2
+        },
+        {
+          "id": "d",
+          "timestamp": 3,
+          "value": 10,
+          "delta": 4
+        }
+      ]
+    },
+    {
+      "inputs": [
+        [
+          {
+            "id": "u1",
+            "timestamp": 4,
+            "value": 8
+          },
+          {
+            "id": "u2",
+            "timestamp": 4,
+            "value": 3
+          },
+          {
+            "id": "u1",
+            "timestamp": 7,
+            "value": 11
+          },
+          {
+            "id": "u3",
+            "timestamp": 7,
+            "value": 1
+          },
+          {
+            "id": "u4",
+            "timestamp": 12,
+            "value": 5
+          },
+          {
+            "id": "u2",
+            "timestamp": 14,
+            "value": 9
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "u1",
+          "timestamp": 4,
+          "value": 8,
+          "delta": 0
+        },
+        {
+          "id": "u2",
+          "timestamp": 4,
+          "value": 3,
+          "delta": -5
+        },
+        {
+          "id": "u3",
+          "timestamp": 7,
+          "value": 1,
+          "delta": -2
+        },
+        {
+          "id": "u4",
+          "timestamp": 12,
+          "value": 5,
+          "delta": 4
+        }
+      ]
+    }
+  ],
+  "test_script": "logs1 = [\n    {\"id\":\"a\",\"timestamp\":2,\"value\":10},\n    {\"id\":\"b\",\"timestamp\":1,\"value\":5},\n    {\"id\":\"a\",\"timestamp\":3,\"value\":20},\n]\nlogs2 = [\n    {\"id\":\"x\",\"timestamp\":5,\"value\":7},\n    {\"id\":\"y\",\"timestamp\":5,\"value\":2},\n    {\"id\":\"z\",\"timestamp\":6,\"value\":4},\n    {\"id\":\"y\",\"timestamp\":1,\"value\":100},\n]\nlogs3 = [\n    {\"id\":\"n1\",\"timestamp\":9,\"value\":10},\n    {\"id\":\"n2\",\"timestamp\":9,\"value\":4},\n    {\"id\":\"n3\",\"timestamp\":8,\"value\":6},\n    {\"id\":\"n4\",\"timestamp\":9,\"value\":9},\n    {\"id\":\"n2\",\"timestamp\":0,\"value\":999},\n]\nlogs4 = [\n    {\"id\":\"s1\",\"timestamp\":1,\"value\":5},\n    {\"id\":\"s2\",\"timestamp\":1,\"value\":7},\n    {\"id\":\"s3\",\"timestamp\":2,\"value\":9},\n]\nlogs5 = [\n    {\"id\":\"d\",\"timestamp\":3,\"value\":10},\n    {\"id\":\"e\",\"timestamp\":2,\"value\":4},\n    {\"id\":\"d\",\"timestamp\":1,\"value\":99},\n    {\"id\":\"f\",\"timestamp\":2,\"value\":6},\n]\nlogs6 = [\n    {\"id\":\"u1\",\"timestamp\":4,\"value\":8},\n    {\"id\":\"u2\",\"timestamp\":4,\"value\":3},\n    {\"id\":\"u1\",\"timestamp\":7,\"value\":11},\n    {\"id\":\"u3\",\"timestamp\":7,\"value\":1},\n    {\"id\":\"u4\",\"timestamp\":12,\"value\":5},\n    {\"id\":\"u2\",\"timestamp\":14,\"value\":9},\n]\nprint(process_logs(logs1))\nprint(process_logs(logs2))\nprint(process_logs(logs3))\nprint(process_logs([]))\nprint(process_logs(logs4))\nprint(process_logs(logs5))\nprint(process_logs(logs6))",
+  "expected_output": [
+    "[{'id': 'b', 'timestamp': 1, 'value': 5, 'delta': 0}, {'id': 'a', 'timestamp': 2, 'value': 10, 'delta': 5}, {'id': 'a', 'timestamp': 3, 'value': 20, 'delta': 10}]",
+    "[{'id': 'y', 'timestamp': 1, 'value': 100, 'delta': 0}, {'id': 'x', 'timestamp': 5, 'value': 7, 'delta': -93}, {'id': 'y', 'timestamp': 5, 'value': 2, 'delta': -5}, {'id': 'z', 'timestamp': 6, 'value': 4, 'delta': 2}]",
+    "[{'id': 'n2', 'timestamp': 0, 'value': 999, 'delta': 0}, {'id': 'n3', 'timestamp': 8, 'value': 6, 'delta': -993}, {'id': 'n1', 'timestamp': 9, 'value': 10, 'delta': 4}, {'id': 'n2', 'timestamp': 9, 'value': 4, 'delta': -6}, {'id': 'n4', 'timestamp': 9, 'value': 9, 'delta': 5}]",
+    "[]",
+    "[{'id': 's1', 'timestamp': 1, 'value': 5, 'delta': 0}, {'id': 's2', 'timestamp': 1, 'value': 7, 'delta': 2}, {'id': 's3', 'timestamp': 2, 'value': 9, 'delta': 2}]",
+    "[{'id': 'd', 'timestamp': 1, 'value': 99, 'delta': 0}, {'id': 'e', 'timestamp': 2, 'value': 4, 'delta': -95}, {'id': 'f', 'timestamp': 2, 'value': 6, 'delta': 2}, {'id': 'd', 'timestamp': 3, 'value': 10, 'delta': 4}]",
+    "[{'id': 'u1', 'timestamp': 4, 'value': 8, 'delta': 0}, {'id': 'u2', 'timestamp': 4, 'value': 3, 'delta': -5}, {'id': 'u1', 'timestamp': 7, 'value': 11, 'delta': 8}, {'id': 'u3', 'timestamp': 7, 'value': 1, 'delta': -10}, {'id': 'u4', 'timestamp': 12, 'value': 5, 'delta': 4}, {'id': 'u2', 'timestamp': 14, 'value': 9, 'delta': 4}]"
+  ]
+}

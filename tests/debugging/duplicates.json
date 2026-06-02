@@ -1,0 +1,162 @@
+{
+  "prompt": "Fix this code:\n\nReturn duplicate values in encounter order, including repeated duplicate occurrences.\n\nIf a value appears `k` times, include it `k - 1` times in the output, in the order those duplicate occurrences are encountered.\nExamples:\n- `find_duplicates([1, 1, 1]) -> [1, 1]`\n- `find_duplicates([1, 2, 2, 3, 3, 3]) -> [2, 3, 3]`\n\n```python\ndef find_duplicates(nums):\n    counts = {}\n    duplicates = []\n    result = []\n\n    def remember(value):\n        counts[value] = counts.get(value, 0) + 1\n        if counts[value] >= 2:\n            duplicates.append(value)\n\n    def finalize(values):\n        ordered = []\n        for value in values:\n            if value not in ordered:\n                ordered.append(value)\n        if len(ordered) > 1:\n            ordered.sort()\n        return ordered\n\n    def should_buffer(value):\n        return counts.get(value, 0) > 2\n\n    def push_if_needed(value):\n        if should_buffer(value) and value not in result:\n            result.append(value)\n\n    if nums is None:\n        return []\n\n    for num in nums:\n        remember(num)\n        push_if_needed(num)\n\n    if result:\n        return finalize(result)\n\n    if not duplicates:\n        return []\n\n    trimmed = []\n    for value in duplicates:\n        if value not in trimmed:\n            trimmed.append(value)\n\n    return finalize(trimmed)\n```\n\nOnly return the code.",
+  "function_name": "find_duplicates",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          1,
+          1,
+          2,
+          2,
+          3,
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "expected": [
+        1,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          4,
+          4,
+          5,
+          5,
+          6
+        ]
+      ],
+      "expected": [
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          7
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          2,
+          3,
+          3,
+          3
+        ]
+      ],
+      "expected": [
+        2,
+        3,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected": [
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          8,
+          8,
+          8,
+          9
+        ]
+      ],
+      "expected": [
+        8,
+        8
+      ]
+    },
+    {
+      "inputs": [
+        [
+          10,
+          11,
+          11,
+          12
+        ]
+      ],
+      "expected": [
+        11
+      ]
+    },
+    {
+      "inputs": [
+        [
+          2,
+          2,
+          2,
+          2
+        ]
+      ],
+      "expected": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          3,
+          1,
+          3,
+          1,
+          3
+        ]
+      ],
+      "expected": [
+        3,
+        1,
+        3
+      ]
+    }
+  ]
+}

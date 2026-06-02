@@ -1,0 +1,15 @@
+{
+  "prompt": "Fix this code.\n\nImplement a TTL cache where keys expire at `now >= expiry_time`.\n\n```python\nclass TTLCache:\n    def __init__(self):\n        self.data = {}\n\n    def put(self, key, value, ttl, now):\n        self.data[key] = (value, now + ttl)\n\n    def get(self, key, now):\n        if key not in self.data:\n            return -1\n        value, expiry = self.data[key]\n        if now > expiry:\n            del self.data[key]\n            return -1\n        return value\n\n    def cleanup(self, now):\n        for key, (_, expiry) in self.data.items():\n            if now > expiry:\n                del self.data[key]\n```\n\nRequirements:\n- expired means `now >= expiry_time`\n- `cleanup` must not crash\n- keep API unchanged\n\nReturn only Python code.",
+  "function_name": "TTLCache",
+  "setup_code": "",
+  "test_script": "c = TTLCache()\nc.put(\"a\", 10, ttl=5, now=0)\nprint(c.get(\"a\", 4))\nprint(c.get(\"a\", 5))\nprint(c.get(\"a\", 6))\nc.put(\"x\", 1, ttl=1, now=7)\nc.put(\"y\", 2, ttl=3, now=7)\nc.cleanup(8)\nprint(c.get(\"x\", 8))\nprint(c.get(\"y\", 8))\nc.cleanup(10)\nprint(c.get(\"y\", 10))\nprint(sorted(c.data.keys()))",
+  "expected_output": [
+    "10",
+    "-1",
+    "-1",
+    "-1",
+    "2",
+    "-1",
+    "[]"
+  ]
+}
