@@ -1,0 +1,110 @@
+{
+  "prompt": "Find all starting indices of substrings formed by concatenating every word exactly once.\n\ndef find_substring(s: str, words: list[str]) -> list[int]:\n\nRequirements:\n- All words have the same length\n- Each word in `words` must appear exactly as many times as given\n- Return indices in ascending order\n- Aim for an efficient sliding-window solution\n\nExamples:\nfind_substring(\"barfoothefoobarman\", [\"foo\", \"bar\"]) -> [0, 9]\nfind_substring(\"wordgoodgoodgoodbestword\", [\"word\", \"good\", \"best\", \"word\"]) -> []\nfind_substring(\"barfoofoobarthefoobarman\", [\"bar\", \"foo\", \"the\"]) -> [6, 9, 12]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "find_substring",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        "barfoothefoobarman",
+        [
+          "foo",
+          "bar"
+        ]
+      ],
+      "expected": [
+        0,
+        9
+      ]
+    },
+    {
+      "inputs": [
+        "wordgoodgoodgoodbestword",
+        [
+          "word",
+          "good",
+          "best",
+          "word"
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        "barfoofoobarthefoobarman",
+        [
+          "bar",
+          "foo",
+          "the"
+        ]
+      ],
+      "expected": [
+        6,
+        9,
+        12
+      ]
+    },
+    {
+      "inputs": [
+        "lingmindraboofooowingdingbarrwingmonkeypoundcake",
+        [
+          "fooo",
+          "barr",
+          "wing",
+          "ding",
+          "wing"
+        ]
+      ],
+      "expected": [
+        13
+      ]
+    },
+    {
+      "inputs": [
+        "",
+        [
+          "foo"
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        "aaaaaa",
+        [
+          "aa",
+          "aa"
+        ]
+      ],
+      "expected": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        "aaaaa",
+        [
+          "a",
+          "a",
+          "a"
+        ]
+      ],
+      "expected": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "test_script": "print(find_substring(\"barfoothefoobarman\", [\"foo\", \"bar\"]))\nprint(find_substring(\"wordgoodgoodgoodbestword\", [\"word\", \"good\", \"best\", \"word\"]))\nprint(find_substring(\"barfoofoobarthefoobarman\", [\"bar\", \"foo\", \"the\"]))\nprint(find_substring(\"lingmindraboofooowingdingbarrwingmonkeypoundcake\", [\"fooo\", \"barr\", \"wing\", \"ding\", \"wing\"]))\nprint(find_substring(\"\", [\"foo\"]))\nprint(find_substring(\"aaaaaa\", [\"aa\", \"aa\"]))\nprint(find_substring(\"aaaaa\", [\"a\", \"a\", \"a\"]))",
+  "expected_output": [
+    "[0, 9]",
+    "[]",
+    "[6, 9, 12]",
+    "[13]",
+    "[]",
+    "[0, 1, 2]",
+    "[0, 1, 2]"
+  ]
+}

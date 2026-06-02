@@ -1,0 +1,107 @@
+model_dir: ~/ollama
+llama_cpp_dir: ~/Projects/llama.cpp
+turbo_dir: ~/Projects/llama-cpp-turboquant
+cuda_root: ~/cuda
+
+build_jobs: 8
+threads: 8
+threads_batch: 16
+
+vram_total_gb: 24
+vram_headroom_gb: 2
+fit_target_mib: 1024
+batch_size: 4096
+ubatch_size: 2048
+
+temp: 1.0
+top_k: 64
+top_p: 0.95
+min_p: 0.05
+
+spec_type: ngram-mod
+spec_ngram_mod_size_n: 16
+spec_ngram_mod_n_min: 24
+spec_ngram_mod_n_max: 48
+draft_min: 8
+draft_max: 24
+
+default_port: 11435
+port_range_end: 11500
+
+families:
+  qwen:
+    small_ctx: 24576
+    large_ctx: 112640
+    temp: 0.6
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repetition_penalty: 1.0
+
+  gemma:
+    chat_template_file: gemma4.jinja
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.05
+
+  bonsai:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.7
+    top_k: 40
+    top_p: 0.95
+    min_p: 0.05
+
+  devstral:
+    chat_template_file: devstral-fix.jinja
+    small_ctx: 24576
+    large_ctx: 81920
+    temp: 0.5
+    top_k: 40
+    top_p: 0.9
+    min_p: 0.05
+
+  mistral-small:
+    chat_template_file: mistral_small_tool_call.jinja
+    small_ctx: 24576
+    large_ctx: 81920
+    temp: 0.15
+    top_k: 40
+    top_p: 0.9
+    min_p: 0.05
+
+  glm:
+    small_ctx: 24576
+    large_ctx: 102400
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.01
+    repetition_penalty: 1.0
+
+  nemotron:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.6
+    top_k: 40
+    top_p: 0.95
+    min_p: 0.05
+
+  phi4:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.8
+    top_k: 50
+    top_p: 0.95
+    min_p: 0.0
+
+  granite:
+    small_ctx: 32768
+    large_ctx: 65536
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.05

@@ -1,0 +1,25 @@
+{
+  "prompt": "Implement a query parser and evaluator.\n\ndef evaluate_query(row: dict, query: str) -> bool:\n\nQuery syntax:\n- comparisons: field == value, field != value\n- logical operators: AND, OR\n- parentheses are supported\n- comparisons are space-delimited tokens\n- values are single tokens with no spaces or quotes\n- operator precedence is AND before OR\n- parentheses override precedence\n\nValues are plain strings without quotes.\n\nExamples:\nrow = {\"status\": \"open\", \"priority\": \"high\"}\n\nevaluate_query(row, \"status == open\") -> True\nevaluate_query(row, \"status == closed OR priority == high\") -> True\nevaluate_query(row, \"status == closed AND priority == high\") -> False\n\nRules:\n- no eval() or exec()\n- parse properly\n- respect precedence: AND > OR\n- parentheses override precedence\n- extra whitespace may appear between tokens\n\nReturn only Python code.\n",
+  "function_name": "evaluate_query",
+  "setup_code": "",
+  "test_script": "row = {\"status\": \"open\", \"priority\": \"high\", \"owner\": \"alice\"}\nprint(evaluate_query(row, \"status == open\"))\nprint(evaluate_query(row, \"status == closed OR priority == high\"))\nprint(evaluate_query(row, \"status == closed AND priority == high\"))\nprint(evaluate_query(row, \"status == open OR priority == low AND owner == bob\"))\nprint(evaluate_query(row, \"(status == closed OR priority == low) AND owner == alice\"))\nprint(evaluate_query(row, \"status != closed AND (priority == high OR owner == bob)\"))\nprint(evaluate_query(row, \"owner == alice AND status != open\"))\nprint(evaluate_query(row, \"(status == open AND priority == low) OR owner == alice\"))\nprint(evaluate_query(row, \"status == open AND (priority == low OR owner == alice)\"))\nprint(evaluate_query(row, \"((status == open))\"))\nprint(evaluate_query(row, \"status != open OR priority != high OR owner != alice\"))\nprint(evaluate_query(row, \"status == closed OR priority == low OR owner == bob\"))\nprint(evaluate_query(row, \"  status   ==   open   AND   owner   ==   alice  \"))\nprint(evaluate_query(row, \"  status   ==   open   AND   (priority == high OR owner == bob)  \"))\nprint(evaluate_query(row, \"status != open OR (priority == low AND owner == alice)\"))\nprint(evaluate_query(row, \"((status == open)) AND owner == alice\"))\nprint(evaluate_query(row, \"(status == closed OR priority == low) AND owner == alice\"))",
+  "expected_output": [
+    "True",
+    "True",
+    "False",
+    "True",
+    "False",
+    "True",
+    "False",
+    "True",
+    "True",
+    "True",
+    "False",
+    "False",
+    "True",
+    "True",
+    "False",
+    "True",
+    "False"
+  ]
+}

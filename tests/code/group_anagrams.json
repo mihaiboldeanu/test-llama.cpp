@@ -1,0 +1,14 @@
+{
+  "prompt": "Group words that are anagrams of each other.\n\ndef group_anagrams(words: list[str]) -> list[list[str]]:\n\nRequirements:\n- Words that are anagrams must be grouped together\n- Preserve original encounter order within each group\n- Groups themselves must be ordered by the first appearance of any word in that group\n- Return a list of groups\n\nExamples:\ngroup_anagrams([\"eat\",\"tea\",\"tan\",\"ate\",\"nat\",\"bat\"]) -> [[\"eat\",\"tea\",\"ate\"],[\"tan\",\"nat\"],[\"bat\"]]\ngroup_anagrams([]) -> []\n\nReturn only Python code, no explanation.\n",
+  "function_name": "group_anagrams",
+  "setup_code": "",
+  "test_script": "cases = [\n    [\"eat\", \"tea\", \"tan\", \"ate\", \"nat\", \"bat\"],\n    [],\n    [\"ab\", \"ba\", \"abc\", \"cab\"],\n    [\"x\"],\n    [\"bob\", \"obb\", \"boo\", \"oob\", \"bob\"],\n    [\"\", \"\", \"a\", \"b\", \"ab\", \"ba\", \"\"],\n]\nfor words in cases:\n    print(group_anagrams(words))",
+  "expected_output": [
+    "[['eat', 'tea', 'ate'], ['tan', 'nat'], ['bat']]",
+    "[]",
+    "[['ab', 'ba'], ['abc', 'cab']]",
+    "[['x']]",
+    "[['bob', 'obb', 'bob'], ['boo', 'oob']]",
+    "[['', '', ''], ['a'], ['b'], ['ab', 'ba']]"
+  ]
+}

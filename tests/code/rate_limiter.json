@@ -1,0 +1,22 @@
+{
+  "prompt": "Implement a sliding-window rate limiter.\n\nclass RateLimiter:\n    def __init__(self, capacity: int, window: int):\n        ...\n    def allow(self, user: str, timestamp: int) -> bool:\n        ...\n\nRules:\n- Each user can make at most `capacity` requests per `window` seconds\n- Use a sliding window, not a fixed bucket\n- Timestamps are integers and non-decreasing per user\n- A request at time `t` counts requests with timestamps in the interval `(t - window, t]`\n- Return True if allowed, False otherwise\n\nExample:\nlimiter = RateLimiter(2, 10)\nallow(\"a\", 1) -> True\nallow(\"a\", 2) -> True\nallow(\"a\", 3) -> False\nallow(\"a\", 11) -> True\n\nReturn only Python code.\n",
+  "function_name": "RateLimiter",
+  "setup_code": "",
+  "test_script": "limiter = RateLimiter(2, 10)\nprint(limiter.allow(\"a\", 1))\nprint(limiter.allow(\"a\", 2))\nprint(limiter.allow(\"a\", 3))\nprint(limiter.allow(\"a\", 11))\nprint(limiter.allow(\"a\", 12))\nprint(limiter.allow(\"a\", 13))\nprint(limiter.allow(\"a\", 21))\nprint(limiter.allow(\"b\", 3))\nprint(limiter.allow(\"b\", 5))\nprint(limiter.allow(\"b\", 12))\nprint(limiter.allow(\"b\", 13))\nprint(limiter.allow(\"c\", 100))\nprint(limiter.allow(\"c\", 109))\nprint(limiter.allow(\"c\", 110))",
+  "expected_output": [
+    "True",
+    "True",
+    "False",
+    "True",
+    "True",
+    "False",
+    "True",
+    "True",
+    "True",
+    "False",
+    "True",
+    "True",
+    "True",
+    "True"
+  ]
+}

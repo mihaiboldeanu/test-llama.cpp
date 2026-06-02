@@ -1,0 +1,49 @@
+{
+  "prompt": "Fix this code:\n\nReorder logs so that:\n- letter-logs come before digit-logs\n- letter-logs are sorted by content, then identifier\n- digit-logs keep original order\n\n```python\ndef reorder_logs(logs):\n    letter_logs = []\n    digit_logs = []\n\n    for log in logs:\n        ident, rest = log.split(\" \", 1)\n        if rest[0].isdigit():\n            digit_logs.append(log)\n        else:\n            letter_logs.append((ident, rest))\n\n    letter_logs.sort()\n    return [f\"{ident} {rest}\" for ident, rest in letter_logs] + sorted(digit_logs)\n```\n\nOnly return the code.",
+  "function_name": "reorder_logs",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          "dig1 8 1 5 1",
+          "let1 art can",
+          "dig2 3 6",
+          "let2 own kit dig",
+          "let3 art zero"
+        ]
+      ],
+      "expected": [
+        "let1 art can",
+        "let3 art zero",
+        "let2 own kit dig",
+        "dig1 8 1 5 1",
+        "dig2 3 6"
+      ]
+    },
+    {
+      "inputs": [
+        [
+          "log1 a",
+          "log2 b"
+        ]
+      ],
+      "expected": [
+        "log1 a",
+        "log2 b"
+      ]
+    },
+    {
+      "inputs": [
+        [
+          "dig1 1",
+          "dig2 2"
+        ]
+      ],
+      "expected": [
+        "dig1 1",
+        "dig2 2"
+      ]
+    }
+  ]
+}

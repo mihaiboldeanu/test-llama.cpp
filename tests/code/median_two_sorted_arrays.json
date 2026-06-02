@@ -1,0 +1,20 @@
+{
+  "prompt": "Find the median of two sorted arrays.\n\ndef find_median_sorted_arrays(nums1: list[int], nums2: list[int]) -> float:\n\nRequirements:\n- Overall time complexity must be O(log(min(m, n)))\n- Do not fully merge the arrays\n- Handle empty arrays on one side\n- Return the exact median as a float\n\nExamples:\nfind_median_sorted_arrays([1, 3], [2]) -> 2.0\nfind_median_sorted_arrays([1, 2], [3, 4]) -> 2.5\nfind_median_sorted_arrays([], [1]) -> 1.0\n\nReturn only Python code, no explanation.\n",
+  "function_name": "find_median_sorted_arrays",
+  "setup_code": "",
+  "test_script": "cases = [\n    ([1, 3], [2]),\n    ([1, 2], [3, 4]),\n    ([], [1]),\n    ([2], []),\n    ([0, 0], [0, 0]),\n    ([1], [2, 3, 4, 5, 6]),\n    ([-5, -3, -1], [-2, 4, 8, 10]),\n    ([1], [2]),\n    ([1, 2, 3], [4, 5, 6, 7]),\n    ([50], [1, 2, 3, 4, 5, 6, 7, 8, 9]),\n    ([100, 101], [1, 2, 3, 4, 5, 6]),\n    ([-10, -5], [-4, -3, -2, -1, 0]),\n]\nfor nums1, nums2 in cases:\n    print(find_median_sorted_arrays(nums1, nums2))",
+  "expected_output": [
+    "2.0",
+    "2.5",
+    "1.0",
+    "2.0",
+    "0.0",
+    "3.5",
+    "-1.0",
+    "1.5",
+    "4.0",
+    "5.5",
+    "4.5",
+    "-3.0"
+  ]
+}

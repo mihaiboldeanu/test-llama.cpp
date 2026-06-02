@@ -1,0 +1,16 @@
+{
+  "prompt": "Find the length of the shortest transformation sequence from `begin_word` to `end_word`.\n\ndef ladder_length(begin_word: str, end_word: str, word_list: list[str]) -> int:\n\nRules:\n- Change exactly one letter at a time\n- Every intermediate word must be in `word_list`\n- Return 0 if `end_word` is unreachable\n- Return the number of words in the sequence, including begin and end\n\nExamples:\nladder_length(\"hit\", \"cog\", [\"hot\",\"dot\",\"dog\",\"lot\",\"log\",\"cog\"]) -> 5\nladder_length(\"hit\", \"cog\", [\"hot\",\"dot\",\"dog\",\"lot\",\"log\"]) -> 0\nladder_length(\"a\", \"c\", [\"a\",\"b\",\"c\"]) -> 2\n\nReturn only Python code, no explanation.\n",
+  "function_name": "ladder_length",
+  "setup_code": "",
+  "test_script": "print(ladder_length(\"hit\", \"cog\", [\"hot\", \"dot\", \"dog\", \"lot\", \"log\", \"cog\"]))\nprint(ladder_length(\"hit\", \"cog\", [\"hot\", \"dot\", \"dog\", \"lot\", \"log\"]))\nprint(ladder_length(\"a\", \"c\", [\"a\", \"b\", \"c\"]))\nprint(ladder_length(\"lost\", \"cost\", [\"most\", \"fost\", \"cost\", \"lost\"]))\nprint(ladder_length(\"talk\", \"tail\", [\"tall\", \"tail\", \"balk\", \"bail\"]))\nprint(ladder_length(\"red\", \"tax\", [\"ted\", \"tex\", \"red\", \"tax\", \"tad\", \"den\", \"rex\", \"pee\"]))\nprint(ladder_length(\"same\", \"same\", [\"same\", \"came\", \"lame\"]))\nprint(ladder_length(\"cold\", \"warm\", [\"cord\", \"card\", \"ward\", \"warm\", \"wold\", \"wald\", \"worm\"]))",
+  "expected_output": [
+    "5",
+    "0",
+    "2",
+    "2",
+    "3",
+    "4",
+    "1",
+    "5"
+  ]
+}

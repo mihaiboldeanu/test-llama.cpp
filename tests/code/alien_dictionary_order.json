@@ -1,0 +1,67 @@
+{
+  "prompt": "Derive the character order from a sorted alien dictionary.\n\ndef alien_order(words: list[str]) -> str:\n\nRequirements:\n- `words` is sorted according to an unknown alphabet\n- Return one valid character ordering as a string\n- If no valid ordering exists, return \"\"\n- If a word is a prefix of an earlier longer word, return \"\"\n- Include every distinct character appearing in `words`\n\nExamples:\nalien_order([\"wrt\",\"wrf\",\"er\",\"ett\",\"rftt\"]) -> \"wertf\"\nalien_order([\"z\",\"x\"]) -> \"zx\"\nalien_order([\"z\",\"x\",\"z\"]) -> \"\"\nalien_order([\"abc\",\"ab\"]) -> \"\"\n\nReturn only Python code, no explanation.\n",
+  "function_name": "alien_order",
+  "setup_code": "def is_valid_order(words, order):\n    if not order:\n        return True\n    chars = set(\"\".join(words))\n    if len(order) != len(chars) or set(order) != chars:\n        return False\n    pos = {ch: i for i, ch in enumerate(order)}\n    for w1, w2 in zip(words, words[1:]):\n        if len(w1) > len(w2) and w1.startswith(w2):\n            return False\n        for a, b in zip(w1, w2):\n            if a != b:\n                if pos[a] > pos[b]:\n                    return False\n                break\n    return True",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          "wrt",
+          "wrf",
+          "er",
+          "ett",
+          "rftt"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "inputs": [
+        [
+          "z",
+          "x"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "inputs": [
+        [
+          "z",
+          "x",
+          "z"
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "inputs": [
+        [
+          "abc",
+          "ab"
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "inputs": [
+        [
+          "baa",
+          "abcd",
+          "abca",
+          "cab",
+          "cad"
+        ]
+      ],
+      "expected": true
+    }
+  ],
+  "test_script": "cases = [\n    [\"wrt\", \"wrf\", \"er\", \"ett\", \"rftt\"],\n    [\"z\", \"x\"],\n    [\"z\", \"x\", \"z\"],\n    [\"abc\", \"ab\"],\n    [\"baa\", \"abcd\", \"abca\", \"cab\", \"cad\"],\n]\nfor words in cases:\n    print(alien_order(words))",
+  "expected_output": [
+    "wertf",
+    "zx",
+    "",
+    "",
+    "bdac"
+  ]
+}

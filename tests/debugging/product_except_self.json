@@ -1,0 +1,95 @@
+{
+  "prompt": "Fix this code:\n\nReturn an array where each element is the product of all other elements.\n\n```python\ndef product_except_self(nums):\n    total = 1\n    for x in nums:\n        total *= x\n    return [total // x for x in nums]\n```\n\nRules:\n- Do not use division\n- Handle zeros correctly\n- Return a list of integers\n\nOnly return the code.",
+  "function_name": "product_except_self",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        24,
+        12,
+        8,
+        6
+      ]
+    },
+    {
+      "inputs": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "expected": [
+        6,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "inputs": [
+        [
+          0,
+          0,
+          2
+        ]
+      ],
+      "expected": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5
+        ]
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          -1,
+          1,
+          -1,
+          1
+        ]
+      ],
+      "expected": [
+        -1,
+        1,
+        -1,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          0,
+          4
+        ]
+      ],
+      "expected": [
+        0,
+        0,
+        8,
+        0
+      ]
+    }
+  ]
+}

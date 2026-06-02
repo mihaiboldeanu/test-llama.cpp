@@ -1,0 +1,134 @@
+{
+  "prompt": "Return the k most frequent elements.\n\ndef top_k_frequent(nums: list[int], k: int) -> list[int]:\n\nRequirements:\n- Return the k most frequent values\n- If frequencies tie, smaller value comes first\n- Output must be ordered by:\n  1. frequency descending\n  2. value ascending\n- Do not mutate the input\n\nExamples:\ntop_k_frequent([1,1,1,2,2,3], 2) -> [1,2]\ntop_k_frequent([4,4,1,1,2,2], 2) -> [1,2]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "top_k_frequent",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          1,
+          1,
+          1,
+          2,
+          2,
+          3
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          4,
+          4,
+          1,
+          1,
+          2,
+          2
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          5
+        ],
+        1
+      ],
+      "expected": [
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          3,
+          3,
+          2,
+          2,
+          1
+        ],
+        2
+      ],
+      "expected": [
+        1,
+        2
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        2
+      ],
+      "expected": [
+        2,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          -1,
+          -1,
+          -2,
+          -2,
+          -2,
+          0
+        ],
+        3
+      ],
+      "expected": [
+        -2,
+        -1,
+        0
+      ]
+    },
+    {
+      "inputs": [
+        [
+          9,
+          9,
+          9,
+          8,
+          8,
+          7,
+          6,
+          6,
+          6,
+          6
+        ],
+        2
+      ],
+      "expected": [
+        6,
+        9
+      ]
+    }
+  ],
+  "test_script": "cases = [\n    ([1, 1, 1, 2, 2, 3], 2),\n    ([4, 4, 1, 1, 2, 2], 2),\n    ([5], 1),\n    ([3, 3, 2, 2, 1], 2),\n    ([1, 2, 2, 3, 3, 3], 2),\n    ([-1, -1, -2, -2, -2, 0], 3),\n    ([9, 9, 9, 8, 8, 7, 6, 6, 6, 6], 2),\n]\nfor nums, k in cases:\n    print(top_k_frequent(nums, k))",
+  "expected_output": [
+    "[1, 2]",
+    "[4, 1]",
+    "[5]",
+    "[3, 2]",
+    "[3, 2]",
+    "[-2, -1, 0]",
+    "[6, 9]"
+  ]
+}

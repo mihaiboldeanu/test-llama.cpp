@@ -13,7 +13,7 @@ from rich.table import Table
 
 from . import DEFAULT_CONFIG, Config
 from .context_test import format_context_results, run_needle_suite
-from .core import calc_kv_cache, discover_models, get_running_models, is_port_used
+from .core import calc_kv_cache, detect_backend, discover_models, get_running_models, is_port_used
 from .launch import build_backend, start_model, stop_model
 from .testing import (
     discover_tests,
@@ -22,11 +22,12 @@ from .testing import (
     run_tests,
     save_results_csv,
 )
+from .testing_modules.batch_runner import BatchRunner, BatchRunnerConfig
 
 console = Console()
 
 # Default test categories for "all"
-DEFAULT_TEST_CATEGORIES = ["code", "debugging", "creative"]
+DEFAULT_TEST_CATEGORIES = ["code", "debugging"]
 
 
 def get_config(config_path: str | None = None) -> Config:
@@ -147,6 +148,21 @@ def start(
         "--seed",
         help="Random seed for generation",
     ),
+    mtp: bool = typer.Option(
+        False,
+        "--mtp",
+        help="Enable Multi-Token Prediction (requires model with MTP heads, e.g. Qwen3.5)",
+    ),
+    mtp_n_max: int = typer.Option(
+        3,
+        "--mtp-n-max",
+        help="Max draft tokens for MTP (default: 3, recommended 2-3 for Qwen)",
+    ),
+    mtp_n_min: int = typer.Option(
+        0,
+        "--mtp-n-min",
+        help="Min draft tokens for MTP (default: 0)",
+    ),
     config_path: str | None = typer.Option(
         None,
         "--config",
@@ -173,18 +189,7 @@ def start(
         raise typer.Exit(1)
 
     # Determine backend and KV types
-    if turbo3:
-        backend = "turboquant"
-        ctk = ctk or "turbo3"
-        ctv = ctv or "turbo3"
-    elif turbo4:
-        backend = "turboquant"
-        ctk = ctk or "turbo4"
-        ctv = ctv or "turbo4"
-    elif ctk and "turbo" in (ctk + (ctv or "")):
-        backend = "turboquant"
-    else:
-        backend = "llama.cpp"
+    backend, ctk, ctv = detect_backend(turbo3, turbo4, ctk, ctv)
 
     # Fit mode options
     config_item = {}
@@ -214,6 +219,9 @@ def start(
             config=cfg,
             config_item=config_item,
             foreground=foreground,
+            mtp=mtp,
+            mtp_n_max=mtp_n_max,
+            mtp_n_min=mtp_n_min,
         )
         if foreground:
             console.print("\n[cyan]Server stopped.[/cyan]")
@@ -316,21 +324,19 @@ def init(
     ),
 ) -> None:
     """Create a config file and clone missing backend repos."""
-    src = Path(__file__).parent.parent / "rama.yaml"
+    src = Path(__file__).parent / "templates" / "rama.yaml"
     dst = Path(config_path).resolve()
 
     if dst.exists():
         console.print(f"[yellow]Config already exists: {dst}[/yellow]")
         return
 
-    # Write config from template or defaults
+    # Load config from template or defaults
     if src.exists():
-        shutil.copy2(src, dst)
+        with open(src) as f:
+            config = yaml.safe_load(f) or {}
     else:
-        # Fallback: generate from DEFAULT_CONFIG
-        with open(dst, "w") as f:
-            yaml.dump(DEFAULT_CONFIG, f, default_flow_style=False)
-    console.print(f"[green]Created config: {dst}[/green]")
+        config = DEFAULT_CONFIG.copy()
 
     # Clone llama.cpp if missing (use config defaults for paths)
     llama_cpp_dir = Path(
@@ -377,10 +383,7 @@ def init(
     else:
         console.print(f"[dim]turboquant already exists at {turbo_dir}[/dim]")
 
-    # Copy and update config with actual paths
-    with open(src) as f:
-        config = yaml.safe_load(f) or {}
-
+    # Update config with actual paths and write
     config["llama_cpp_dir"] = str(llama_cpp_dir)
     config["turbo_dir"] = str(turbo_dir)
 
@@ -564,6 +567,233 @@ def context(
 
 
 @app.command()
+def nihs(
+    port: int | None = typer.Argument(None, help="Port of running model (context mode)"),
+    file_or_config: str | None = typer.Argument(None, help="Text file (context mode) or batch config (batch mode)"),
+    needle_loc: str = typer.Option(
+        "beginning,middle,end",
+        "--needle-loc",
+        "-n",
+        help="Where to hide the needle: beginning, middle, end, or percentage (e.g., 25%, 75%). Comma-separated for multiple locations.",
+    ),
+    seed: int | None = typer.Option(
+        None, "--seed", help="Random seed for needle generation"
+    ),
+    enhanced: bool = typer.Option(
+        False, "--enhanced", help="Run enhanced NIHS with multi-needle and distractors"
+    ),
+    difficulty: str = typer.Option(
+        "easy", "--difficulty", "-d", help="Difficulty level: easy, medium, hard, expert, or all"
+    ),
+    model_name: str | None = typer.Option(
+        None, "-m", "--model", help="Model name for enhanced/difficulty mode"
+    ),
+    ctx_size: int | None = typer.Option(
+        None, "--ctx", help="Context size for enhanced/difficulty mode"
+    ),
+    num_needles: int = typer.Option(
+        8, "--num-needles", help="Number of needles for enhanced mode"
+    ),
+    distractor_types: str = typer.Option(
+        "lexical,topical,irrelevant", "--distractors", help="Comma-separated distractor types"
+    ),
+    config_path: str | None = typer.Option(
+        None, "--config", "-c", help="Config file path"
+    ),
+) -> None:
+    """Needle-in-haystack test - retrieve information from long contexts.
+
+    Supports four modes:
+    - Context mode: test a running model on a text file
+    - Batch mode: test multiple models from a batch config
+    - Enhanced mode: multi-needle with distractors (auto-starts model)
+    - Difficulty mode: inject context noise at various levels (auto-starts model)
+    """
+    cfg = get_config(config_path)
+
+    # Enhanced mode
+    if enhanced:
+        _run_enhanced_nihs(cfg, model_name, ctx_size, num_needles, distractor_types, seed)
+        return
+
+    # Difficulty mode
+    if difficulty != "easy" or (model_name and not port):
+        _run_difficulty_nihs(cfg, model_name, ctx_size, difficulty, seed)
+        return
+
+    # Batch mode
+    if port is None and file_or_config and Path(file_or_config).suffix == ".yaml":
+        _run_batch_nihs(cfg, file_or_config, needle_loc, seed)
+        return
+
+    # Context mode (default)
+    if port is None or file_or_config is None:
+        console.print("[red]Context mode requires: rama nihs <port> <file>[/red]")
+        raise typer.Exit(1)
+
+    file_paths = [Path(f.strip()) for f in file_or_config.split(",")]
+    for f in file_paths:
+        if not f.exists():
+            console.print(f"[red]File not found: {f}[/red]")
+            raise typer.Exit(1)
+
+    locations = [loc.strip() for loc in needle_loc.split(",")]
+    console.print("[cyan]Running needle-in-haystack tests...[/cyan]")
+    console.print(f"Files: {', '.join(f.name for f in file_paths)}")
+    console.print(f"Needle locations: {locations}")
+
+    results = run_needle_suite(port, file_paths, locations, seed=seed)
+    console.print("\n" + format_context_results(results))
+
+
+def _run_enhanced_nihs(
+    cfg: dict,
+    model_name: str | None,
+    ctx_size: int | None,
+    num_needles: int,
+    distractor_types: str,
+    seed: int | None,
+) -> None:
+    """Run enhanced NIHS with multi-needle and distractors."""
+    from rama.testing_modules.enhanced_nihs import (
+        Distractor,
+        EnhancedNIHSConfig,
+        EnhancedNIHSModule,
+        Needle,
+    )
+
+    if not model_name:
+        console.print("[red]Enhanced mode requires -m <model_name>[/red]")
+        raise typer.Exit(1)
+
+    cfg_obj = Config.load(cfg)
+    models = discover_models(cfg)
+    model = next((m for m in models if m.name == model_name or model_name in m.aliases), None)
+    if model is None:
+        console.print(f"[red]Model not found: {model_name}[/red]")
+        console.print("[dim]Available models:[/dim]")
+        for m in models:
+            console.print(f"  - {m.name} ({', '.join(m.aliases)})")
+        raise typer.Exit(1)
+
+    context_size = ctx_size or cfg_obj.context_size or 65536
+    dist_types = [t.strip() for t in distractor_types.split(",")]
+
+    nihs_config = EnhancedNIHSConfig(
+        num_needles=num_needles,
+        distractor_types=dist_types,
+        context_size=context_size,
+        seed=seed,
+    )
+
+    module = EnhancedNIHSModule(cfg, model, nihs_config)
+    console.print(f"[cyan]Running enhanced NIHS on {model.name} (ctx={context_size})...[/cyan]")
+    result = module.run()
+
+    if result.metadata:
+        acc = result.metadata.get("accuracy", 0)
+        found = result.metadata.get("found", 0)
+        total = result.metadata.get("total", 0)
+        console.print(f"\n[green]Enhanced NIHS complete: {found}/{total} found ({acc:.0%})[/green]")
+    if result.error:
+        console.print(f"[red]Error: {result.error}[/red]")
+
+
+def _run_difficulty_nihs(
+    cfg: dict,
+    model_name: str | None,
+    ctx_size: int | None,
+    difficulty: str,
+    seed: int | None,
+) -> None:
+    """Run context difficulty injection tests."""
+    from rama.testing_modules.context_difficulty import (
+        ContextDifficultyConfig,
+        ContextDifficultyModule,
+    )
+
+    if not model_name:
+        console.print("[red]Difficulty mode requires -m <model_name>[/red]")
+        raise typer.Exit(1)
+
+    cfg_obj = Config.load(cfg)
+    models = discover_models(cfg)
+    model = next((m for m in models if m.name == model_name or model_name in m.aliases), None)
+    if model is None:
+        console.print(f"[red]Model not found: {model_name}[/red]")
+        console.print("[dim]Available models:[/dim]")
+        for m in models:
+            console.print(f"  - {m.name} ({', '.join(m.aliases)})")
+        raise typer.Exit(1)
+
+    difficulty_levels = ["easy"] if difficulty == "easy" else difficulty.split(",")
+    context_size = ctx_size or cfg_obj.context_size or 65536
+
+    difficulty_config = ContextDifficultyConfig(
+        context_size=context_size,
+        difficulty_levels={
+            k: v
+            for k, v in ContextDifficultyConfig().difficulty_levels.items()
+            if k in difficulty_levels or difficulty == "all"
+        },
+    )
+
+    module = ContextDifficultyModule(cfg, model, difficulty_config)
+    console.print(f"[cyan]Running context difficulty tests on {model.name}...[/cyan]")
+    result = module.run()
+
+    if result.metadata:
+        results = result.metadata.get("results", {})
+        for level, data in results.items():
+            if "error" in data:
+                console.print(f"[red]{level}: {data['error']}[/red]")
+            else:
+                scores = [r.get("score", 0) for r in data.get("results", [])]
+                avg = sum(scores) / len(scores) if scores else 0
+                wiki_tokens = data.get("wiki_tokens_injected", 0)
+                console.print(f"[green]{level}: avg score={avg:.1f}/10 (wiki tokens injected: {wiki_tokens})[/green]")
+    if result.error:
+        console.print(f"[red]Error: {result.error}[/red]")
+
+
+def _run_batch_nihs(
+    cfg: dict,
+    config_path: str,
+    needle_loc: str,
+    seed: int | None,
+) -> None:
+    """Run NIHS tests across multiple models from batch config."""
+    from rama.testing_modules.batch_runner import BatchRunner
+
+    if not Path(config_path).exists():
+        console.print(f"[red]Config not found: {config_path}[/red]")
+        raise typer.Exit(1)
+
+    locations = [loc.strip() for loc in needle_loc.split(",")]
+    cfg_obj = Config.load(cfg)
+
+    with open(config_path) as f:
+        batch_config = yaml.safe_load(f) or {}
+
+    console.print(f"[cyan]Running batch NIHS from {config_path}...[/cyan]")
+    console.print(f"Needle locations: {locations}")
+
+    runner = BatchRunner(cfg_obj, batch_config, test_type="nihs")
+    results = runner.run_nihs_batch(Path(config_path).parent, locations, seed)
+
+    if results:
+        console.print("\n[bold]=== Batch NIHS Results ===[/bold]")
+        for model_name, model_results in results.items():
+            for loc, result in model_results.items():
+                score = result.get("score", "N/A")
+                found = result.get("found", "N/A")
+                total = result.get("total", "N/A")
+                console.print(
+                    f"  [cyan]{model_name}[/cyan] @ {loc}: {found}/{total} found (score: {score})"
+                )
+
+
+@app.command()
 def run(
     model_name: str = typer.Argument(..., help="Model name or alias"),
     port: int | None = typer.Option(None, "--port", "-p", help="Port to use"),
@@ -585,6 +815,21 @@ def run(
     ),
     seed: int | None = typer.Option(
         None, "--seed", help="Random seed for generation (default: random)"
+    ),
+    mtp: bool = typer.Option(
+        False,
+        "--mtp",
+        help="Enable Multi-Token Prediction (requires model with MTP heads, e.g. Qwen3.5)",
+    ),
+    mtp_n_max: int = typer.Option(
+        3,
+        "--mtp-n-max",
+        help="Max draft tokens for MTP (default: 3, recommended 2-3 for Qwen)",
+    ),
+    mtp_n_min: int = typer.Option(
+        0,
+        "--mtp-n-min",
+        help="Min draft tokens for MTP (default: 0)",
     ),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
     judge_port: int | None = typer.Option(
@@ -617,18 +862,7 @@ def run(
         raise typer.Exit(1)
 
     # Determine backend
-    if turbo3:
-        backend = "turboquant"
-        ctk = ctk or "turbo3"
-        ctv = ctv or "turbo3"
-    elif turbo4:
-        backend = "turboquant"
-        ctk = ctk or "turbo4"
-        ctv = ctv or "turbo4"
-    elif ctk and "turbo" in (ctk + (ctv or "")):
-        backend = "turboquant"
-    else:
-        backend = "llama.cpp"
+    backend, ctk, ctv = detect_backend(turbo3, turbo4, ctk, ctv)
 
     config_item = {}
     config_item["fit"] = fit
@@ -649,6 +883,9 @@ def run(
             seed=seed,
             config=cfg,
             config_item=config_item,
+            mtp=mtp,
+            mtp_n_max=mtp_n_max,
+            mtp_n_min=mtp_n_min,
         )
         console.print(f"[green]Model started on port {result.port}[/green]")
 
@@ -798,6 +1035,12 @@ def perplexity(
 @app.command()
 def batch(
     config_file: str = typer.Argument(..., help="Batch config YAML file"),
+    batch_type: str = typer.Option(
+        "code",
+        "--type",
+        "-t",
+        help="Batch type: code, perplexity, nihs, kv",
+    ),
     start_port: int = typer.Option(11435, "--start-port", help="Starting port"),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
     output_dir: str = typer.Option(
@@ -814,190 +1057,54 @@ def batch(
         "--config",
         help="Config file path",
     ),
+    text_file: str | None = typer.Option(
+        None, "--text", help="Text file for NIHS/perplexity batch"
+    ),
+    ctx_size: int = typer.Option(0, "--ctx", help="Context size (for perplexity/nihs)"),
+    kv_quants: str = typer.Option(
+        "f16,q8_0,q4_0", "--kvs", "-k", help="KV quant types for kv batch"
+    ),
+    ctx_sizes: str = typer.Option(
+        "8192,32768,65536,131072,262144",
+        "--ctx-sizes",
+        "-s",
+        help="Context sizes for NIHS",
+    ),
+    needle_loc: str = typer.Option(
+        "beginning,middle,end", "--needle-loc", "-n", help="Needle locations"
+    ),
 ) -> None:
     """Run batch of models from config file.
 
-    Config file format (YAML):
-    - model: qwen27b              # just model name (uses defaults)
-    - model: qwen27b, ctk: turbo3, ctv: turbo3  # with options
-    - model: qwen27b, ctx: 65536  # custom context
+    Batch types:
+      code       - code/debugging tests (default)
+      perplexity - perplexity evaluation
+      nihs       - needle-in-haystack batch
+      kv         - KV quant comparison batch
+
+    Examples:
+       rama batch config/batch_large.yaml --type code
+       rama batch config/batch_ppl.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
+       rama batch config/batch_large.yaml --type nihs --text book.txt
+       rama batch config/batch_large.yaml --type kv --kvs f16,q8_0
     """
-    cfg = get_config(config_path)
-    models = discover_models(cfg)
+    batch_config = BatchRunnerConfig(
+        config_file=config_file,
+        batch_type=batch_type,
+        start_port=start_port,
+        categories=categories,
+        output_dir=output_dir,
+        seed=seed,
+        config_path=config_path,
+        text_file=text_file,
+        ctx_size=ctx_size,
+        kv_quants=kv_quants,
+        ctx_sizes=ctx_sizes,
+        needle_loc=needle_loc,
+    )
 
-    # Load batch config
-    with open(config_file) as f:
-        batch_config = yaml.safe_load(f)
-
-    # Create output dir
-    output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = output_path / f"batch_{timestamp}.json"
-
-    console.print(f"[cyan]Batch running {len(batch_config)} models...[/cyan]")
-    console.print(f"Results will be saved to {output_path}/")
-    console.print("")
-
-    all_results = []
-    port = start_port
-
-    for item in batch_config:
-        if isinstance(item, str):
-            model_name = item
-            config_item = {}
-        else:
-            model_name = item.get("model", "")
-            config_item = {k: v for k, v in item.items() if k != "model"}
-
-        if seed is not None and "seed" not in config_item:
-            config_item["seed"] = seed
-
-        if not model_name:
-            continue
-
-        # Find model
-        model = None
-
-        # Try exact match first
-        for m in models:
-            if model_name in (m.name, m.path.name):
-                model = m
-                break
-
-        # Fall back to case-insensitive match
-        if model is None:
-            for m in models:
-                if (
-                    m.name.lower() == model_name.lower()
-                    or m.path.name.lower() == model_name.lower()
-                ):
-                    model = m
-                    break
-
-        # Last resort: substring match (with warning)
-        if model is None:
-            for m in models:
-                if (
-                    model_name.lower() in m.name.lower()
-                    or model_name.lower() in m.path.name.lower()
-                ):
-                    console.print(
-                        f"[yellow]Warning: fuzzy match for '{model_name}' -> '{m.name}'[/yellow]"
-                    )
-                    model = m
-                    break
-
-            if model is None:
-                console.print(f"[red]Model not found: {model_name}[/red]")
-                continue
-
-        # Determine options
-        ctk = config_item.get("ctk")
-        ctv = config_item.get("ctv")
-        ctx_size = config_item.get("ctx")
-        turbo3 = config_item.get("turbo3", False)
-        turbo4 = config_item.get("turbo4", False)
-
-        if turbo3:
-            backend = "turboquant"
-            ctk = ctk or "turbo3"
-            ctv = ctv or "turbo3"
-        elif turbo4:
-            backend = "turboquant"
-            ctk = ctk or "turbo4"
-            ctv = ctv or "turbo4"
-        elif ctk and "turbo" in (ctk + (ctv or "")):
-            backend = "turboquant"
-        else:
-            backend = "llama.cpp"
-
-        use_port = port
-        port += 1
-
-        console.print(f"[cyan]=== {model.name} ===[/cyan]")
-        console.print(
-            f"  Backend: {backend}, ctk={ctk or 'q8_0'}, ctv={ctv or 'q8_0'}, ctx={ctx_size}",
-        )
-
-        result = None
-        try:
-            # Start model
-            result = start_model(
-                model,
-                backend=backend,
-                port=use_port,
-                ctx_size=ctx_size,
-                ctk=ctk,
-                ctv=ctv,
-                seed=config_item.get("seed"),
-                config=cfg,
-                config_item=config_item,
-            )
-            console.print(f"  Started on port {result.port}")
-
-            try:
-                # Run tests
-                cats = (
-                    categories.split(",")
-                    if categories != "all"
-                    else DEFAULT_TEST_CATEGORIES
-                )
-                test_start = time.perf_counter()
-                test_result = run_tests(result.port, categories=cats)
-                test_duration = time.perf_counter() - test_start
-
-                # Save result
-                result_data = {
-                    "model": model.name,
-                    "backend": backend,
-                    "ctk": ctk or "q8_0",
-                    "ctv": ctv or "q8_0",
-                    "ctx": ctx_size or "auto",
-                    "seed": result.seed,
-                    "test_time_seconds": round(test_duration, 3),
-                    "score": test_result.overall_score,
-                    "tests": [
-                        {
-                            "name": r.name,
-                            "category": r.category,
-                            "prompt": r.prompt,
-                            "response": r.response,
-                            "ran": r.ran,
-                            "correct": r.correct,
-                            "score": r.score,
-                        }
-                        for r in test_result.results
-                    ],
-                }
-                all_results.append(result_data)
-
-                # Save after each model (in case of crash)
-                results_file.write_text(json.dumps(all_results, indent=2))
-                csv_file = output_path / f"batch_{timestamp}.csv"
-                save_results_csv(all_results, csv_file)
-
-                console.print(f"  Score: {test_result.overall_score}/10")
-                console.print(f"  Test time: {test_duration:.2f}s")
-            finally:
-                if result is not None:
-                    stop_model(result.port, cfg)
-                    console.print("  Stopped")
-
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-
-        console.print("")
-
-    # Save all results
-    results_file.write_text(json.dumps(all_results, indent=2))
-    csv_file = output_path / f"batch_{timestamp}.csv"
-    save_results_csv(all_results, csv_file)
-
-    console.print("[green]Batch complete![/green]")
-    console.print(f"  JSON results: {results_file}")
-    console.print(f"  CSV results: {csv_file}")
+    runner = BatchRunner(batch_config)
+    runner.run()
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ llama_cpp_dir: ~/Projects/llama.cpp
 turbo_dir: ~/Projects/llama-cpp-turboquant
 
 # CUDA toolkit path
-cuda_root: /opt/cuda-13.1
+cuda_root: ~/cuda
 
 # Your GPU VRAM (auto-detected via nvidia-smi if not set)
 vram_total_gb: 24
@@ -81,15 +81,96 @@ threads_batch: 24
 
 ### Model Families
 
-Override settings per model family:
+Each family gets its own `small_ctx`/`large_ctx` context tiers and sampling defaults:
 
 ```yaml
 families:
   qwen:
-    max_ctx: 262144        # Hard cap on context
-    preferred_ctx: 131072  # Default when auto-calculating
+    small_ctx: 24576
+    large_ctx: 112640
+    temp: 0.6
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repetition_penalty: 1.0
+
   gemma:
-    max_ctx: 131072
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.05
+
+  bonsai:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.7
+    top_k: 40
+    top_p: 0.95
+    min_p: 0.05
+
+  devstral:
+    small_ctx: 24576
+    large_ctx: 81920
+    temp: 0.5
+    top_k: 40
+    top_p: 0.9
+    min_p: 0.05
+
+  mistral-small:
+    small_ctx: 24576
+    large_ctx: 81920
+    temp: 0.15
+    top_k: 40
+    top_p: 0.9
+    min_p: 0.05
+
+  glm:
+    small_ctx: 24576
+    large_ctx: 102400
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.01
+    repetition_penalty: 1.0
+
+  nemotron:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.6
+    top_k: 40
+    top_p: 0.95
+    min_p: 0.05
+
+  phi4:
+    small_ctx: 24576
+    large_ctx: 65536
+    temp: 0.8
+    top_k: 50
+    top_p: 0.95
+    min_p: 0.0
+
+  granite:
+    small_ctx: 32768
+    large_ctx: 65536
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.05
+```
+
+Models below 10GB get `small_ctx`, otherwise `large_ctx` (uniform threshold across families).
+
+### Per-Model Overrides
+
+Override any setting for a specific model (merges on top of family config):
+
+```yaml
+models:
+  MySpecialModel:
+    temp: 0.8
+    preferred_ctx: 65536
 ```
 
 ## VRAM Management
@@ -117,7 +198,7 @@ uv run rama start qwen27b -f
 # Custom context size
 uv run rama start qwen27b --ctx 65536
 
-# Custom quantization types
+# Custom KV cache types
 uv run rama start qwen27b --ctk q8_0 --ctv q4_0
 
 # TurboQuant KV cache
@@ -127,6 +208,38 @@ uv run rama start qwen27b --turbo4
 # Specific port
 uv run rama start qwen27b --port 11436
 ```
+
+### Reasoning Models (Qwen, Bonsai)
+
+Qwen models auto-detect reasoning based on size (≥10GB = on, <10GB = off). Override with `--reasoning`/`--no-reasoning`:
+
+```bash
+# Force reasoning on/off
+uv run rama start qwen27b --reasoning
+uv run rama start qwen-small --no-reasoning
+
+# Custom reasoning budget (default: 1024 tokens)
+uv run rama start qwen27b --reasoning-budget 2048
+```
+
+### Speculative Decoding
+
+Two modes available, mutually exclusive:
+
+**N-gram speculative decoding** (set in rama.yaml):
+```yaml
+spec_type: ngram-mod
+spec_ngram_mod_size_n: 24
+spec_ngram_mod_n_min: 48
+spec_ngram_mod_n_max: 64
+```
+
+**Draft model speculative decoding** (CLI):
+```bash
+uv run rama start qwen27b --draft-model qwen08b --draft-max 64 --draft-min 48
+```
+
+Disable speculative decoding: set `spec_type: null` in rama.yaml and omit `--draft-model`.
 
 ### Manage Running Models
 
@@ -160,9 +273,6 @@ uv run rama test 11435
 # Specific categories
 uv run rama test 11435 --categories code,debugging
 
-# All categories (code, debugging, creative)
-uv run rama test 11435 --categories all
-
 # JSON output
 uv run rama test 11435 --format json
 
@@ -184,22 +294,27 @@ uv run rama run qwen27b --turbo3
 uv run rama run qwen27b --categories code
 ```
 
-### Needle-in-Haystack (Context Tests)
+### Needle-in-Haystack (Unified `nihs` command)
 
-Test how well a model retrieves information from long contexts:
+Test how well a model retrieves information from long contexts. The `rama nihs` command supports four modes:
 
 ```bash
-# Basic test at default positions (beginning, middle, end)
-uv run rama context 11435 large_file.txt
+# Context mode (running model on port)
+uv run rama nihs 11435 large_file.txt
+uv run rama nihs 11435 large_file.txt -n beginning,25%,middle,75%,end
+uv run rama nihs 11435 large_file.txt --seed 42
 
-# Test at specific positions
-uv run rama context 11435 large_file.txt -n beginning,25%,middle,75%,end
+# Batch mode (multiple models, KV quants, context sizes)
+uv run rama nihs config/batch_large.yaml wikitext-2/wiki.train.tokens
+uv run rama nihs config/batch_large.yaml text.txt -s 8192,32768 -q f16,q8_0
 
-# Custom seed for reproducibility
-uv run rama context 11435 large_file.txt --seed 42
+# Enhanced mode (multi-needle + distractors, auto-starts model)
+uv run rama nihs --enhanced -m qwen27b --ctx 65536
+uv run rama nihs --enhanced -m qwen27b -n 10 -d lexical,topical,irrelevant
 
-# Multiple files
-uv run rama context 11435 file1.txt,file2.txt -n beginning,middle,end
+# Difficulty mode (context injection, auto-starts model)
+uv run rama nihs --difficulty all -m qwen27b
+uv run rama nihs --difficulty medium -m qwen27b
 ```
 
 The test:
@@ -222,7 +337,14 @@ uv run rama bench 11435 -p 1024 -n 256
 Compare multiple model/backend combinations automatically. Batch config files live in `config/`.
 
 ```bash
-uv run rama batch config/batch_qwen27b.yaml
+# Large models (>10B)
+uv run rama batch-test config/batch_large.yaml
+
+# Small models (<=10B)
+uv run rama batch-test config/batch_small.yaml
+
+# Perplexity testing
+uv run rama batch-test config/batch_ppl.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
 ```
 
 The batch runner:
@@ -255,33 +377,46 @@ The batch runner:
   ctx: 131072
 ```
 
-### Example Batch Files
-
-Pre-configured batch files in `config/`:
-
-- `batch_qwen27b.yaml` - Qwen 27B comparisons
-- `batch_gemma31b.yaml` - Gemma 31B comparisons
-- `batch_template.yaml` - Template for custom batches
-
 ### Batch Options
 
 ```bash
 # Custom starting port (models run on sequential ports)
-uv run rama batch config/batch.yaml --start-port 11440
+uv run rama batch-test config/batch_large.yaml --start-port 11440
 
 # Custom output directory
-uv run rama batch config/batch.yaml --output-dir my_results
+uv run rama batch-test config/batch_large.yaml --output-dir my_results
 
 # Fixed seed across all runs
-uv run rama batch config/batch.yaml --seed 42
+uv run rama batch-test config/batch_large.yaml --seed 42
 
 # Specific categories
-uv run rama batch config/batch.yaml --categories code
+uv run rama batch-test config/batch_large.yaml --categories code
+```
+
+### Needle-in-a-Haystack Testing
+
+Single unified command for all NIHS testing needs:
+
+```bash
+# Context mode (running model on port)
+rama nihs 11435 book.txt -n beginning,middle,end
+rama nihs 11435 book.txt -n beginning,25%,middle,75%,end
+
+# Batch mode (multiple models, KV quants, context sizes)
+rama nihs config/batch_large.yaml wikitext-2/wiki.train.tokens
+rama nihs config/batch_large.yaml text.txt -s 8192,32768,65536 -q f16,q8_0
+
+# Enhanced mode (multi-needle + distractors, auto-starts model)
+rama nihs --enhanced -m qwen27b -n 10 -d lexical,topical,irrelevant
+
+# Difficulty mode (context difficulty injection, auto-starts model)
+rama nihs --difficulty all -m qwen27b
+rama nihs --difficulty medium -m qwen27b
 ```
 
 ## Build
 
-Build backends from source:
+Build backends from source (auto-builds on `start` if binary is missing):
 
 ```bash
 uv run rama build llama.cpp
@@ -289,6 +424,8 @@ uv run rama build turboquant
 uv run rama build all --force
 uv run rama build llama.cpp --cpu-only
 ```
+
+Build targets CUDA arch 8.9 (RTX 4090) with flash attention for all quant types.
 
 ## Useful Commands
 
@@ -301,4 +438,9 @@ uv run rama status 11435
 
 # Run perplexity benchmark
 uv run rama perplexity qwen27b path/to/text.txt
+
+# Run llama-bench (native benchmark, no server needed)
+uv run rama llama-bench qwen27b
+uv run rama llama-bench qwen27b -p 1024 -n 256 -r 3
+uv run rama llama-bench qwen27b -o json
 ```

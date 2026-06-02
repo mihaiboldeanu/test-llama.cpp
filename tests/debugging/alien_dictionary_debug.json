@@ -1,0 +1,59 @@
+{
+  "prompt": "Fix this code.\n\nReturn a valid alien character order or \"\" if impossible.\n\n```python\nfrom collections import defaultdict, deque\n\ndef alien_order(words):\n    graph = defaultdict(set)\n    indegree = defaultdict(int)\n\n    for word in words:\n        for ch in word:\n            indegree[ch] = 0\n\n    for i in range(len(words) - 1):\n        a, b = words[i], words[i + 1]\n        for j in range(min(len(a), len(b))):\n            if a[j] != b[j]:\n                if b[j] not in graph[a[j]]:\n                    graph[a[j]].add(b[j])\n                    indegree[b[j]] += 1\n                break\n\n    queue = deque([ch for ch in indegree if indegree[ch] == 0])\n    order = []\n\n    while queue:\n        ch = queue.popleft()\n        order.append(ch)\n        for nei in graph[ch]:\n            indegree[nei] -= 1\n            if indegree[nei] == 0:\n                queue.append(nei)\n\n    return \"\".join(order)\n```\n\nOnly return the code.",
+  "function_name": "alien_order",
+  "setup_code": "from collections import defaultdict, deque\n\ndef is_valid_order(order, words):\n    order_index = {ch: i for i, ch in enumerate(order)}\n    for i in range(len(words) - 1):\n        a, b = words[i], words[i + 1]\n        min_len = min(len(a), len(b))\n        if min_len == 0 and len(a) > len(b):\n            return False\n        for j in range(min_len):\n            if a[j] != b[j]:\n                if order_index.get(a[j], -1) >= order_index.get(b[j], -1):\n                    return False\n                break\n        else:\n            if len(a) > len(b):\n                return False\n    return True",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          "wrt",
+          "wrf",
+          "er",
+          "ett",
+          "rftt"
+        ]
+      ],
+      "expected": "wertf"
+    },
+    {
+      "inputs": [
+        [
+          "z",
+          "x"
+        ]
+      ],
+      "expected": "zx"
+    },
+    {
+      "inputs": [
+        [
+          "z",
+          "x",
+          "z"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "inputs": [
+        [
+          "abc",
+          "ab"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "inputs": [
+        [
+          "baa",
+          "abcd",
+          "abca",
+          "cab",
+          "cad"
+        ]
+      ],
+      "expected": "bdac"
+    }
+  ]
+}

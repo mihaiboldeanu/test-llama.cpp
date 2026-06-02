@@ -6,6 +6,33 @@ from pathlib import Path
 from . import Config
 
 
+def _sweep_stale_pids() -> None:
+    """Remove PID files for dead processes. Called once on import."""
+    pid_dir = get_pid_dir()
+    if not pid_dir.exists():
+        return
+
+    for pid_file in pid_dir.glob("model_*.pid"):
+        try:
+            import json
+
+            content = pid_file.read_text().strip()
+            if not content:
+                pid_file.unlink()
+                continue
+
+            try:
+                data = json.loads(content)
+                pid = data["pid"]
+            except (json.JSONDecodeError, KeyError):
+                pid = int(content)
+
+            os.kill(pid, 0)  # Process alive, keep file
+        except (OSError, ValueError):
+            pid_file.unlink(missing_ok=True)  # Dead or corrupt, remove
+
+
+
 @dataclass
 class ModelInfo:
     """Discovered GGUF model."""
@@ -93,15 +120,24 @@ def detect_family(path: Path) -> str:
     name = path.name.lower()
     parent = path.parent.name.lower()
 
+    if "glm" in parent or "glm" in name:
+        return "glm"
+    if "devstral" in parent or "devstral" in name:
+        return "devstral"
+    if "mistral-small" in name or "mistral-small" in parent:
+        return "mistral-small"
     if "gemma" in parent or "gemma" in name:
-        # Gemma 31B gets special treatment for 256K context
-        if "31b" in name or "31b" in parent:
-            return "gemma31b"
         return "gemma"
     if "bonsai" in parent or "bonsai" in name:
         return "bonsai"
     if "qwen" in parent or "qwen" in name:
         return "qwen"
+    if "nemotron" in parent or "nemotron" in name:
+        return "nemotron"
+    if "phi-4" in name or "phi-4" in parent or "phi4" in name or "phi4" in parent:
+        return "phi4"
+    if "granite" in parent or "granite" in name:
+        return "granite"
     return "unknown"
 
 
@@ -133,11 +169,9 @@ def calc_kv_cache(
     model_vram = model_size_gb
     kv_vram = vram_available - model_vram
 
-    if kv_vram < 0.5:
-        raise RuntimeError(
-            f"Not enough VRAM for KV cache: {kv_vram:.1f}GB available. "
-            f"Model needs {model_vram:.1f}GB, only {vram_available:.1f}GB total."
-        )
+    kv_vram = max(
+        kv_vram, 0.1
+    )  # Allow launch even if model exceeds VRAM (llama.cpp will offload)
 
     # Very tight VRAM - minimal context
     if kv_vram < 1:
@@ -145,27 +179,37 @@ def calc_kv_cache(
             "qwen": _get_qwen_kv_bytes_per_token(model_size_gb),
             "gemma": _get_gemma_kv_bytes_per_token(model_size_gb),
             "bonsai": 8000,
-            "gemma31b": _get_gemma_kv_bytes_per_token(model_size_gb),
+            "nemotron": 6000,
+            "phi4": 5000,
+            "granite": _get_granite_kv_bytes_per_token(model_size_gb),
+            "glm": 25000,
+            "mistral-small": 25000,
+            "devstral": 25000,
         }.get(family, 15000)
         tight_ctx = int((kv_vram * 1024**3) / kv_per_token_kb)
         return (max(2048, min(tight_ctx, 8192)), "q8_0", "q8_0")
 
-    # Get max_ctx from family config
-    family_config = config.families.get(family, {})
-    max_ctx_limit = family_config.get("max_ctx", 262144)
+    # Use a global safe maximum; individual families no longer override.
+    max_ctx_limit = 262144
 
     # Default: q8_0 for both k and v
     kv_per_token_bytes = {
         "qwen": _get_qwen_kv_bytes_per_token(model_size_gb),
         "gemma": _get_gemma_kv_bytes_per_token(model_size_gb),
         "bonsai": 8000,
-        "gemma31b": _get_gemma_kv_bytes_per_token(model_size_gb),
+        "nemotron": _get_nemotron_kv_bytes_per_token(model_size_gb),
+        "phi4": _get_phi4_kv_bytes_per_token(model_size_gb),
+        "granite": _get_granite_kv_bytes_per_token(model_size_gb),
+        "glm": _get_glm_kv_bytes_per_token(model_size_gb),
+        "mistral-small": _get_mistral_small_kv_bytes_per_token(model_size_gb),
+        "devstral": _get_devstral_kv_bytes_per_token(model_size_gb),
     }.get(family, 15000)
 
     # Calculate max ctx with q8_0
     max_ctx = int((kv_vram * 1024**3) / kv_per_token_bytes)
     max_ctx = min(max_ctx, max_ctx_limit)
-    max_ctx = min(max_ctx, config.get("default_ctx", 131072))
+    preferred = get_preferred_ctx(model_size_gb, family, config)
+    max_ctx = min(max_ctx, preferred)
 
     if max_ctx >= 2048:
         return (max_ctx, "q8_0", "q8_0")
@@ -180,6 +224,23 @@ def calc_kv_cache(
     return (min(1024, max_ctx_limit), "q8_0", "q8_0")
 
 
+def get_preferred_ctx(
+    model_size_gb: float,
+    family: str,
+    config: Config,
+) -> int:
+    """Get preferred context size based on model size and family config.
+
+    Uses small_ctx for models below 10GB, large_ctx otherwise.
+    """
+    family_config = config.families.get(family, {})
+    threshold = 10  # uniform threshold; per-family small_threshold_gb removed
+
+    if model_size_gb < threshold:
+        return family_config.get("small_ctx", 0)
+    return family_config.get("large_ctx", 131072)
+
+
 def _get_qwen_kv_bytes_per_token(size_gb: float) -> int:
     if size_gb < 10:
         return 11000  # 9B
@@ -192,18 +253,69 @@ def _get_qwen_kv_bytes_per_token(size_gb: float) -> int:
 
 def _get_gemma_kv_bytes_per_token(size_gb: float) -> int:
     if size_gb < 10:
-        return 5000  # 4B
+        return 5000  # E4B
     if size_gb < 25:
         return 25000  # 31B
     return 40000
 
 
-def find_free_port(config: Config) -> int:
-    """Find a free port in range."""
+def _get_nemotron_kv_bytes_per_token(size_gb: float) -> int:
+    if size_gb < 10:
+        return 6000  # 4B
+    return 25000  # 30B-A3B
+
+
+def _get_phi4_kv_bytes_per_token(size_gb: float) -> int:
+    if size_gb < 10:
+        return 5000  # mini 4B
+    return 15000  # 14B
+
+
+def _get_granite_kv_bytes_per_token(size_gb: float) -> int:
+    if size_gb < 5:
+        return 40960  # 3B: 40 layers * 8 kv_heads * 64 head_dim * 2 bytes
+    if size_gb < 15:
+        return 131072  # 8B: 40 layers * 8 kv_heads * 128 head_dim * 2 bytes
+    return 131072  # 30B: 64 layers * 8 kv_heads * 128 head_dim * 2 bytes
+
+
+def _get_glm_kv_bytes_per_token(size_gb: float) -> int:
+    if size_gb < 10:
+        return 8000  # MoE small variants
+    return 48000  # GLM-4.7-Flash 30B MoE, kv_lora_rank=512 compression
+
+
+def _get_mistral_small_kv_bytes_per_token(size_gb: float) -> int:
+    return 82000  # Mistral Small 3.1: 40 layers × 8 KV heads × 128 head_dim × 2
+
+
+def _get_devstral_kv_bytes_per_token(size_gb: float) -> int:
+    return 82000  # Devstral Small 2: same arch as Mistral Small (40×8×128×2)
+
+
+def find_free_port(config: Config, start_port: int | None = None) -> int:
+    """Find a free port in range.
+
+    ``start_port`` is optional for backward compatibility with older callers
+    that want to continue scanning from a specific port.
+    """
     start, end = config.port_range
-    for port in range(start, end + 1):
+
+    if start_port is None:
+        scan_start = start
+    else:
+        scan_start = min(max(start_port, start), end + 1)
+        if scan_start > end:
+            scan_start = start
+
+    for port in range(scan_start, end + 1):
         if not is_port_used(port):
             return port
+
+    for port in range(start, scan_start):
+        if not is_port_used(port):
+            return port
+
     raise RuntimeError(f"No free ports in range {start}-{end}")
 
 
@@ -257,9 +369,41 @@ def get_running_models(config: Config) -> list[RunningModel]:
     return running
 
 
+def detect_backend(
+    turbo3: bool = False,
+    turbo4: bool = False,
+    ctk: str | None = None,
+    ctv: str | None = None,
+) -> tuple[str, str | None, str | None]:
+    """Detect backend and KV cache types from CLI flags.
+
+    Returns: (backend, ctk, ctv)
+    """
+    if turbo3:
+        return "turboquant", ctk or "turbo3", ctv or "turbo3"
+    if turbo4:
+        return "turboquant", ctk or "turbo4", ctv or "turbo4"
+    if ctk and "turbo" in (ctk + (ctv or "")):
+        return "turboquant", ctk, ctv
+    return "llama.cpp", ctk, ctv
+
+
 def get_model_pid(config: Config, port: int) -> int | None:
     """Get PID for a model on given port."""
+    import json
+
     pid_dir = get_pid_dir()
     for pid_file in pid_dir.glob(f"model_*_{port}.pid"):
-        return int(pid_file.read_text().strip())
+        try:
+            content = pid_file.read_text().strip()
+            try:
+                data = json.loads(content)
+                return data.get("pid")
+            except (json.JSONDecodeError, KeyError):
+                return int(content)
+        except (ValueError, OSError):
+            continue
     return None
+
+
+_sweep_stale_pids()

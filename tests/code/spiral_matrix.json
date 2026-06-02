@@ -1,0 +1,162 @@
+{
+  "prompt": "Return all elements of a matrix in spiral order.\n\ndef spiral_order(matrix: list[list[int]]) -> list[int]:\n\nRequirements:\n- Traverse clockwise in spiral order\n- Handle empty matrix\n- Handle one row, one column, and rectangular matrices\n\nExamples:\nspiral_order([[1,2,3],[4,5,6],[7,8,9]]) -> [1,2,3,6,9,8,7,4,5]\nspiral_order([[1,2,3,4]]) -> [1,2,3,4]\nspiral_order([[1],[2],[3]]) -> [1,2,3]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "spiral_order",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          4,
+          5,
+          6
+        ],
+        [
+          7,
+          8,
+          9
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        6,
+        9,
+        8,
+        7,
+        4,
+        5
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        []
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          5,
+          6
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        4,
+        6,
+        5,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        4,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1
+        ]
+      ],
+      "expected": [
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          4,
+          5,
+          6
+        ]
+      ],
+      "expected": [
+        1,
+        2,
+        3,
+        6,
+        5,
+        4
+      ]
+    }
+  ],
+  "test_script": "cases = [\n    [[1, 2, 3], [4, 5, 6], [7, 8, 9]],\n    [[1, 2, 3, 4]],\n    [[1], [2], [3]],\n    [],\n    [[1, 2], [3, 4], [5, 6]],\n    [[1, 2], [3, 4]],\n    [[1]],\n    [[1, 2, 3], [4, 5, 6]],\n]\nfor matrix in cases:\n    print(spiral_order(matrix))",
+  "expected_output": [
+    "[1, 2, 3, 6, 9, 8, 7, 4, 5]",
+    "[1, 2, 3, 4]",
+    "[1, 2, 3]",
+    "[]",
+    "[1, 2, 4, 6, 5, 3]",
+    "[1, 2, 4, 3]",
+    "[1]",
+    "[1, 2, 3, 6, 5, 4]"
+  ]
+}

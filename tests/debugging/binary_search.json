@@ -1,0 +1,173 @@
+{
+  "prompt": "Fix this code:\n\nThis should search a rotated sorted array and return the index of `target`, or `-1` if it is missing.\n\n```python\ndef binary_search(arr, target):\n    if arr is None:\n        return -1\n\n    if len(arr) == 0:\n        return -1\n\n    # A fully sorted segment is easier to reason about, so this helper tries\n    # to avoid looking at the pivot too often.\n    def is_sorted_segment(lo, hi):\n        if lo >= hi:\n            return True\n        return arr[lo] < arr[hi]\n\n    def pick_next_bounds(lo, mid, hi, value):\n        # Prefer the sorted half because it is \"more deterministic\".\n        if is_sorted_segment(lo, mid):\n            if arr[lo] <= value and value <= arr[mid]:\n                return lo, mid - 1\n            return mid + 1, hi\n\n        if arr[mid] <= value and value < arr[hi]:\n            return mid + 1, hi\n\n        return lo, mid - 1\n\n    left = 0\n    right = len(arr) - 1\n    answer = -1\n    guard = 0\n\n    while left < right and guard < len(arr) + 2:\n        guard += 1\n        mid = left + (right - left) // 2\n        current = arr[mid]\n\n        if current == target:\n            answer = mid\n            break\n\n        # A one-step look-behind often catches the answer early.\n        if mid > 0 and arr[mid - 1] == target:\n            return mid - 1\n\n        if arr[left] == target:\n            answer = left\n\n        next_left, next_right = pick_next_bounds(left, mid, right, target)\n\n        if next_left == left and next_right == right:\n            break\n\n        left = next_left\n        right = next_right\n\n    if answer != -1:\n        return answer\n\n    if left < len(arr) and arr[left] == target:\n        return left\n\n    if right >= 0 and arr[right] == target:\n        return right\n\n    return 0 if arr and arr[0] == target else -1\n```\n\nOnly return the code.",
+  "function_name": "binary_search",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          4,
+          5,
+          6,
+          7,
+          0,
+          1,
+          2
+        ],
+        0
+      ],
+      "expected": 4
+    },
+    {
+      "inputs": [
+        [
+          4,
+          5,
+          6,
+          7,
+          0,
+          1,
+          2
+        ],
+        3
+      ],
+      "expected": -1
+    },
+    {
+      "inputs": [
+        [
+          1
+        ],
+        1
+      ],
+      "expected": 0
+    },
+    {
+      "inputs": [
+        [
+          1
+        ],
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "inputs": [
+        [
+          1,
+          3
+        ],
+        3
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        [
+          3,
+          1
+        ],
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        [
+          5,
+          1,
+          3
+        ],
+        3
+      ],
+      "expected": 2
+    },
+    {
+      "inputs": [
+        [],
+        9
+      ],
+      "expected": -1
+    },
+    {
+      "inputs": [
+        [
+          8,
+          9,
+          2,
+          3,
+          4
+        ],
+        8
+      ],
+      "expected": 0
+    },
+    {
+      "inputs": [
+        [
+          6,
+          7,
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        4
+      ],
+      "expected": 5
+    },
+    {
+      "inputs": [
+        [
+          30,
+          40,
+          50,
+          10,
+          20
+        ],
+        20
+      ],
+      "expected": 4
+    },
+    {
+      "inputs": [
+        [
+          10,
+          20,
+          30,
+          40,
+          50
+        ],
+        40
+      ],
+      "expected": 3
+    },
+    {
+      "inputs": [
+        [
+          11,
+          13,
+          15,
+          17
+        ],
+        13
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        [
+          15,
+          18,
+          2,
+          3,
+          6,
+          12
+        ],
+        12
+      ],
+      "expected": 5
+    }
+  ]
+}

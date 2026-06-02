@@ -1,0 +1,259 @@
+{
+  "prompt": "Fix this code.\n\nGoal:\nGroup events into sessions per user.\nA new session starts if the time gap is greater than 10.\nAn exact gap of 10 stays in the same session.\n\nReturn:\nuser -> list of sessions\neach session is a list of event ids\n\n```python\ndef group_sessions(events):\n    sessions = {}\n    last_time = {}\n\n    for user, event_id, timestamp in events:\n        if user not in sessions:\n            sessions[user] = []\n            sessions[user].append([])\n\n        if user in last_time:\n            if timestamp - last_time[user] >= 10:\n                sessions[user].append([])\n\n        sessions[user][-1].append(event_id)\n        last_time[user] = timestamp\n\n    return sessions\n```\n\nReturn only code.",
+  "function_name": "group_sessions",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "e1",
+            1
+          ],
+          [
+            "a",
+            "e2",
+            5
+          ],
+          [
+            "a",
+            "e3",
+            15
+          ]
+        ]
+      ],
+      "expected": {
+        "a": [
+          [
+            "e1",
+            "e2",
+            "e3"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "e1",
+            1
+          ],
+          [
+            "b",
+            "e2",
+            2
+          ],
+          [
+            "a",
+            "e3",
+            11
+          ],
+          [
+            "b",
+            "e4",
+            20
+          ]
+        ]
+      ],
+      "expected": {
+        "a": [
+          [
+            "e1",
+            "e3"
+          ]
+        ],
+        "b": [
+          [
+            "e2"
+          ],
+          [
+            "e4"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        [
+          [
+            "u",
+            "x1",
+            10
+          ],
+          [
+            "u",
+            "x2",
+            21
+          ],
+          [
+            "u",
+            "x3",
+            31
+          ]
+        ]
+      ],
+      "expected": {
+        "u": [
+          [
+            "x1"
+          ],
+          [
+            "x2",
+            "x3"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        []
+      ],
+      "expected": {}
+    },
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "e1",
+            1
+          ],
+          [
+            "a",
+            "e2",
+            12
+          ],
+          [
+            "a",
+            "e3",
+            22
+          ],
+          [
+            "a",
+            "e4",
+            40
+          ]
+        ]
+      ],
+      "expected": {
+        "a": [
+          [
+            "e1"
+          ],
+          [
+            "e2",
+            "e3"
+          ],
+          [
+            "e4"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "e1",
+            1
+          ],
+          [
+            "a",
+            "e2",
+            11
+          ],
+          [
+            "a",
+            "e3",
+            22
+          ]
+        ]
+      ],
+      "expected": {
+        "a": [
+          [
+            "e1",
+            "e2"
+          ],
+          [
+            "e3"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "e1",
+            1
+          ],
+          [
+            "b",
+            "e2",
+            1
+          ],
+          [
+            "a",
+            "e3",
+            20
+          ],
+          [
+            "b",
+            "e4",
+            12
+          ],
+          [
+            "b",
+            "e5",
+            23
+          ]
+        ]
+      ],
+      "expected": {
+        "a": [
+          [
+            "e1"
+          ],
+          [
+            "e3"
+          ]
+        ],
+        "b": [
+          [
+            "e2"
+          ],
+          [
+            "e4"
+          ],
+          [
+            "e5"
+          ]
+        ]
+      }
+    },
+    {
+      "inputs": [
+        [
+          [
+            "solo",
+            "only",
+            99
+          ]
+        ]
+      ],
+      "expected": {
+        "solo": [
+          [
+            "only"
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "prompt": "Fix this code:\n\nReturn the kth smallest value in a BST.\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None):\n        self.val = val\n        self.left = left\n        self.right = right\n\ndef kth_smallest(root, k):\n    values = []\n\n    def dfs(node):\n        if not node:\n            return\n        values.append(node.val)\n        dfs(node.left)\n        dfs(node.right)\n\n    dfs(root)\n    return sorted(values)[k]\n```\n\nOnly return the code.",
+  "function_name": "kth_smallest",
+  "setup_code": "\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None):\n        self.val = val\n        self.left = left\n        self.right = right\n\ndef build_tree(nodes):\n    if not nodes:\n        return None\n    root = TreeNode(nodes[0])\n    queue = [root]\n    i = 1\n    while queue and i < len(nodes):\n        node = queue.pop(0)\n        if nodes[i] is not None:\n            node.left = TreeNode(nodes[i])\n            queue.append(node.left)\n        i += 1\n        if i < len(nodes) and nodes[i] is not None:\n            node.right = TreeNode(nodes[i])\n            queue.append(node.right)\n        i += 1\n    return root\n",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          3,
+          1,
+          4,
+          null,
+          2
+        ],
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        [
+          5,
+          3,
+          6,
+          2,
+          4,
+          null,
+          null,
+          1
+        ],
+        3
+      ],
+      "expected": 3
+    },
+    {
+      "inputs": [
+        [
+          1
+        ],
+        1
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        [
+          2,
+          1,
+          3
+        ],
+        2
+      ],
+      "expected": 2
+    },
+    {
+      "inputs": [
+        [
+          5,
+          3,
+          7,
+          2,
+          4,
+          6,
+          8
+        ],
+        5
+      ],
+      "expected": 6
+    }
+  ],
+  "arg_transform": "build_tree"
+}

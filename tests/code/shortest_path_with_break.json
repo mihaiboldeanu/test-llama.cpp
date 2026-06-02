@@ -1,0 +1,16 @@
+{
+  "prompt": "Implement:\n\ndef shortest_path_with_break(grid: list[list[int]]) -> int:\n\nRules:\n- `grid` contains 0 (empty) and 1 (wall)\n- start = top-left, end = bottom-right\n- move up/down/left/right\n- you may break at most one wall\n- return shortest path length in number of cells visited\n- return -1 if unreachable\n\nExamples:\nshortest_path_with_break([[0,1],[0,0]]) -> 3\nshortest_path_with_break([[0,1,1],[1,1,0],[1,1,0]]) -> -1\n\nReturn only Python code.\n",
+  "function_name": "shortest_path_with_break",
+  "setup_code": "",
+  "test_script": "cases = [\n    ([[0]], 1),\n    ([[0,1],[0,0]], 3),\n    ([[0,1,1],[1,1,0],[1,1,0]], -1),\n    ([[0,1,0],[0,1,0],[0,0,0]], 5),\n    ([[0,1,0],[1,1,0],[0,0,0]], 5),\n    ([[0,0,0],[1,1,0],[0,0,0]], 5),\n    ([[0,1,1,0],[0,0,1,0],[1,0,0,0]], 6),\n    ([[0,1,1,1],[1,1,1,0],[0,0,0,0],[0,1,1,0]], 7),\n]\nfor grid, _ in cases:\n    print(shortest_path_with_break(grid))",
+  "expected_output": [
+    "1",
+    "3",
+    "-1",
+    "5",
+    "5",
+    "5",
+    "6",
+    "7"
+  ]
+}

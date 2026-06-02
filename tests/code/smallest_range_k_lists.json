@@ -1,0 +1,186 @@
+{
+  "prompt": "Find the smallest range covering at least one number from each sorted list.\n\ndef smallest_range(nums: list[list[int]]) -> list[int]:\n\nRequirements:\n- Each inner list is sorted in ascending order\n- Return [start, end] of the smallest inclusive range containing at least one number from each list\n- If multiple ranges have the same length, return the one with the smaller start\n- Use an efficient heap-based solution\n\nExamples:\nsmallest_range([[4,10,15,24,26],[0,9,12,20],[5,18,22,30]]) -> [20,24]\nsmallest_range([[1,2,3],[1,2,3],[1,2,3]]) -> [1,1]\n\nReturn only Python code, no explanation.\n",
+  "function_name": "smallest_range",
+  "setup_code": "",
+  "test_cases": [
+    {
+      "inputs": [
+        [
+          [
+            4,
+            10,
+            15,
+            24,
+            26
+          ],
+          [
+            0,
+            9,
+            12,
+            20
+          ],
+          [
+            5,
+            18,
+            22,
+            30
+          ]
+        ]
+      ],
+      "expected": [
+        20,
+        24
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            1,
+            2,
+            3
+          ]
+        ]
+      ],
+      "expected": [
+        1,
+        1
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1
+          ],
+          [
+            2
+          ],
+          [
+            3
+          ]
+        ]
+      ],
+      "expected": [
+        1,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1,
+            5,
+            8
+          ],
+          [
+            4,
+            12
+          ],
+          [
+            7,
+            8,
+            10
+          ]
+        ]
+      ],
+      "expected": [
+        4,
+        7
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            -10,
+            -5,
+            0
+          ],
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ]
+        ]
+      ],
+      "expected": [
+        0,
+        4
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1,
+            4
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            3,
+            6
+          ]
+        ]
+      ],
+      "expected": [
+        1,
+        3
+      ]
+    },
+    {
+      "inputs": [
+        [
+          [
+            1,
+            1,
+            2
+          ],
+          [
+            1,
+            2,
+            2
+          ],
+          [
+            1,
+            2,
+            3
+          ]
+        ]
+      ],
+      "expected": [
+        1,
+        1
+      ]
+    }
+  ],
+  "test_script": "cases = [\n    [[4,10,15,24,26],[0,9,12,20],[5,18,22,30]],\n    [[1,2,3],[1,2,3],[1,2,3]],\n    [[1],[2],[3]],\n    [[1,5,8],[4,12],[7,8,10]],\n    [[-10,-5,0],[1,2,3],[4,5,6]],\n    [[1,4],[2,5],[3,6]],\n    [[1,1,2],[1,2,2],[1,2,3]],\n]\nfor nums in cases:\n    print(smallest_range(nums))",
+  "expected_output": [
+    "[20, 24]",
+    "[1, 1]",
+    "[1, 3]",
+    "[4, 7]",
+    "[0, 4]",
+    "[1, 3]",
+    "[1, 1]"
+  ]
+}
