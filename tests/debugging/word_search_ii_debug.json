@@ -1,6 +1,7 @@
 {
   "prompt": "Fix this code.\n\nReturn all distinct dictionary words found in the board.\n\nIf `board` is empty or `words` is empty, return `[]`.\nThe same word should appear at most once in the output even if it is listed multiple times in `words`.\n\n```python\nclass TrieNode:\n    def __init__(self):\n        self.children = {}\n        self.word = None\n\ndef find_words(board, words):\n    root = TrieNode()\n    for word in words:\n        node = root\n        for ch in word:\n            node = node.children.setdefault(ch, TrieNode())\n        node.word = word\n\n    rows, cols = len(board), len(board[0])\n    found = []\n    visited = set()\n\n    def dfs(r, c, node):\n        if (r < 0 or r >= rows or c < 0 or c >= cols or\n            (r, c) in visited or board[r][c] not in node.children):\n            return\n\n        visited.add((r, c))\n        nxt = node.children[board[r][c]]\n\n        if nxt.word:\n            found.append(nxt.word)\n\n        dfs(r + 1, c, nxt)\n        dfs(r - 1, c, nxt)\n        dfs(r, c + 1, nxt)\n        dfs(r, c - 1, nxt)\n\n    for r in range(rows):\n        for c in range(cols):\n            dfs(r, c, root)\n\n    return found\n```\n\nOnly return the code.",
   "function_name": "find_words",
+  "order_independent": true,
   "setup_code": "class TrieNode:\n    def __init__(self):\n        self.children = {}\n        self.word = None",
   "test_cases": [
     {
@@ -94,15 +95,15 @@
           ]
         ],
         [
-          "ag",
-          "if",
-          "km"
+          "ab",
+          "bf",
+          "aeim"
         ]
       ],
       "expected": [
-        "ag",
-        "if",
-        "km"
+        "ab",
+        "aeim",
+        "bf"
       ]
     },
     {
@@ -137,6 +138,34 @@
         ]
       ],
       "expected": []
+    },
+    {
+      "inputs": [
+        [],
+        [
+          "a"
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "inputs": [
+        [
+          [
+            "a",
+            "a"
+          ]
+        ],
+        [
+          "a",
+          "a",
+          "aa"
+        ]
+      ],
+      "expected": [
+        "a",
+        "aa"
+      ]
     },
     {
       "inputs": [

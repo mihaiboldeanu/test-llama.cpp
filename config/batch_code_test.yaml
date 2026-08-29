@@ -1,0 +1,228 @@
+# Batch test config - Code & Debugging tests
+# Code and debugging comparison at 16K. Each entry uses its family/card
+# settings; the batch runner applies the same ten sampled seeds to both tasks.
+
+- model: "deepreinforce-ai_Ornith-1.0-9B-Q6_K_L"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "deepreinforce-ai_Ornith-1.0-35B-Q6_K_L"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "ornith-1.0-35b-Q6_K"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Qwen3.6-27B-Q4_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Qwen3.6-27B-Q4_K_M_mtp"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+  mtp: true
+
+- model: "grug-27b-Q4_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "ThinkingCap-Qwen3.6-27B-Q4_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Bonsai-27B-Q1_0"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Qwen3.6-35B-A3B-UD-Q6_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Nex-N2-mini-UD-Q5_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Mellum2-12B-A2.5B-Thinking-Q8_0"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "gemma-4-26B-A4B-it-UD-Q6_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "gemma-4-26B-A4B-it-UD-Q8_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "gemma-4-31B-it-IQ4_XS"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "gemma-4-31B-it-Q4_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "granite-4.1-30b-UD-Q4_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "nvidia_Nemotron-Cascade-2-30B-A3B-Q5_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "gpt-oss-20b-UD-Q8_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "LFM2-24B-A2B-Q8_0"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Ling-mini-2.0-Q6_K"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Ling-mini-2.0-Q8_0"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "GLM-4.7-Flash-UD-Q4_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "GLM-4.7-Flash-UD-Q6_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "North-Mini-Code-1.0-UD-Q6_K_XL"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-XS-2.1-Q4_K_M"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-XS-2.1-Q4_K_L"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-XS-2.1-Q5_K_L"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-XS-2.1-Q6_K"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-XS-2.1-Q6_K_L"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false
+
+- model: "Laguna-S-2.1-UD-IQ4_XS"
+  ctx: 16384
+  ctk: f16
+  ctv: f16
+  max_tokens: 1024
+  reasoning: false

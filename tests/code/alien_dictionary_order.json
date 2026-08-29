@@ -13,7 +13,7 @@
           "rftt"
         ]
       ],
-      "expected": true
+      "expected": "wertf"
     },
     {
       "inputs": [
@@ -22,7 +22,7 @@
           "x"
         ]
       ],
-      "expected": true
+      "expected": "zx"
     },
     {
       "inputs": [
@@ -32,7 +32,7 @@
           "z"
         ]
       ],
-      "expected": false
+      "expected": ""
     },
     {
       "inputs": [
@@ -41,7 +41,7 @@
           "ab"
         ]
       ],
-      "expected": false
+      "expected": ""
     },
     {
       "inputs": [
@@ -53,7 +53,7 @@
           "cad"
         ]
       ],
-      "expected": true
+      "expected": "bdac"
     }
   ],
   "test_script": "cases = [\n    [\"wrt\", \"wrf\", \"er\", \"ett\", \"rftt\"],\n    [\"z\", \"x\"],\n    [\"z\", \"x\", \"z\"],\n    [\"abc\", \"ab\"],\n    [\"baa\", \"abcd\", \"abca\", \"cab\", \"cad\"],\n]\nfor words in cases:\n    print(alien_order(words))",

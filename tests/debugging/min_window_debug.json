@@ -51,6 +51,20 @@
         "abcd"
       ],
       "expected": ""
+    },
+    {
+      "inputs": [
+        "AAABBC",
+        "ABC"
+      ],
+      "expected": "ABBC"
+    },
+    {
+      "inputs": [
+        "anything",
+        ""
+      ],
+      "expected": ""
     }
   ]
 }

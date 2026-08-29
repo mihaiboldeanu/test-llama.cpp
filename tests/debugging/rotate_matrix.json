@@ -1,5 +1,5 @@
 {
-  "prompt": "Fix this code:\n\nRotate an n x n matrix 90 degrees clockwise in place.\n\n```python\ndef rotate(matrix):\n    n = len(matrix)\n    for i in range(n):\n        for j in range(n):\n            matrix[i][j], matrix[j][i] = matrix[j][i], matrix[i][j]\n\n    for row in matrix:\n        row = row[::-1]\n```\n\nOnly return the code.",
+  "prompt": "Fix this code:\n\nRotate an n x n matrix 90 degrees clockwise in place, then return the rotated matrix.\n\n```python\ndef rotate(matrix):\n    n = len(matrix)\n    for i in range(n):\n        for j in range(n):\n            matrix[i][j], matrix[j][i] = matrix[j][i], matrix[i][j]\n\n    for row in matrix:\n        row = row[::-1]\n```\n\nOnly return the code.",
   "function_name": "rotate",
   "setup_code": "",
   "test_cases": [
