@@ -8,10 +8,13 @@ Baseline: 119/119 tests pass, ruff clean.
 The Phase 3-5 refactor exists only on this machine. A fresh clone imports
 missing modules and has no tests.
 
-- [ ] Commit `rama/domain/` (7 files) + `rama/families.py` (imported by launch.py, testing.py, core.py)
-- [ ] Commit test suite: 13 `tests/test_*.py` + `tests/__init__.py` + `tests/fixtures/`
-- [ ] Commit `config/` (only `batch_code_test.yaml`, `batch_code_test_reasoning.yaml` are committable; the other 3 are machine-tuning and gitignored)
-- [ ] Commit the 43 modified files in logical chunks, not one blob:
+- [x] Committed in 4 chunks (2026-08-29): `202b700` pihole removal, `c852032` domain-layer +
+  families registry refactor (29 files), `c5c2fae` pytest suite + fixtures + batch configs
+  (36 files), `14f9480` docs + pytest dev dep. Tree clean, 119/119 tests pass on HEAD.
+- [x] (superseded by the chunking above) Commit `rama/domain/` (7 files) + `rama/families.py` (imported by launch.py, testing.py, core.py)
+- [x] (superseded) Commit test suite: 13 `tests/test_*.py` + `tests/__init__.py` + `tests/fixtures/`
+- [x] (superseded) Commit `config/` (only `batch_code_test.yaml`, `batch_code_test_reasoning.yaml` are committable; the other 3 are machine-tuning and gitignored)
+- [x] (superseded) Commit the 43 modified files in logical chunks, not one blob:
   1. removal of `pihole-backup-2026-05-24.tar.gz`
   2. domain-layer + families registry refactor
   3. test suite + fixtures
