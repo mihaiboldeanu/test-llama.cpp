@@ -92,7 +92,19 @@ families:
     top_k: 20
     top_p: 0.95
     min_p: 0.0
-    repetition_penalty: 1.0
+    repeat_penalty: 1.0
+
+  qwen3.8:
+    # Native thinking mode uses a distinct official sampling profile.
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 112640
+    temp: 1.0
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 0.0
 
   gemma:
     small_ctx: 24576
@@ -133,7 +145,7 @@ families:
     top_k: 64
     top_p: 0.95
     min_p: 0.01
-    repetition_penalty: 1.0
+    repeat_penalty: 1.0
 
   nemotron:
     small_ctx: 24576
@@ -209,17 +221,14 @@ uv run rama start qwen27b --turbo4
 uv run rama start qwen27b --port 11436
 ```
 
-### Reasoning Models (Qwen, Bonsai)
+### Reasoning Models
 
-Qwen models auto-detect reasoning based on size (≥10GB = on, <10GB = off). Override with `--reasoning`/`--no-reasoning`:
+Rama selects a family-appropriate reasoning mode at launch. Batch and test runs can force reasoning off; a batch item can also set `reasoning: false` for one model.
 
 ```bash
-# Force reasoning on/off
-uv run rama start qwen27b --reasoning
-uv run rama start qwen-small --no-reasoning
-
-# Custom reasoning budget (default: 1024 tokens)
-uv run rama start qwen27b --reasoning-budget 2048
+# Disable it for an entire batch or a test against a running server
+uv run rama batch config/batch_code_north.yaml --no-reasoning
+uv run rama test 11435 --no-reasoning
 ```
 
 ### Speculative Decoding
@@ -239,7 +248,19 @@ spec_ngram_mod_n_max: 64
 uv run rama start qwen27b --draft-model qwen08b --draft-max 64 --draft-min 48
 ```
 
-Disable speculative decoding: set `spec_type: null` in rama.yaml and omit `--draft-model`.
+**MTP speculative decoding** (for GGUFs with the MTP head embedded, i.e.
+`blk.N.nextn.*` tensors in the file — llama.cpp reads the head from the main model):
+```bash
+uv run rama start qwen3.8 --mtp
+uv run rama start qwen3.8 --mtp --mtp-n-max 4 --mtp-n-min 1
+```
+
+The launch context for MTP runs is scaled by `mtp_ctx_ratio` (default 0.8,
+chain-resolvable per family/model in rama.yaml, e.g. `families.qwen3.8.mtp_ctx_ratio`).
+The `rama start` banner prints the value the server will actually allocate —
+llama.cpp pads the context up to a multiple of 256.
+
+Disable speculative decoding: set `spec_type: null` in rama.yaml, omit `--draft-model`, and don't pass `--mtp`.
 
 ### Manage Running Models
 
@@ -252,6 +273,12 @@ uv run rama running
 
 # Show estimated max context per model
 uv run rama ctxinfo
+
+# Needle-in-haystack on a running server
+uv run rama context 11435 book.txt -n beginning,25%,middle,75%,end
+
+# Show the fully resolved profile for a model (dry-run, nothing launches)
+uv run rama explain qwen27b
 
 # Stop a server by port
 uv run rama stop 11435
@@ -305,8 +332,8 @@ uv run rama nihs 11435 large_file.txt -n beginning,25%,middle,75%,end
 uv run rama nihs 11435 large_file.txt --seed 42
 
 # Batch mode (multiple models, KV quants, context sizes)
-uv run rama nihs config/batch_large.yaml wikitext-2/wiki.train.tokens
-uv run rama nihs config/batch_large.yaml text.txt -s 8192,32768 -q f16,q8_0
+uv run rama batch config/batch_code_test.yaml --type nihs --text wikitext-2/wiki.train.tokens
+uv run rama batch config/batch_code_test.yaml --type nihs --text text.txt --ctx-sizes 8192,32768
 
 # Enhanced mode (multi-needle + distractors, auto-starts model)
 uv run rama nihs --enhanced -m qwen27b --ctx 65536
@@ -337,21 +364,44 @@ uv run rama bench 11435 -p 1024 -n 256
 Compare multiple model/backend combinations automatically. Batch config files live in `config/`.
 
 ```bash
-# Large models (>10B)
-uv run rama batch-test config/batch_large.yaml
-
-# Small models (<=10B)
-uv run rama batch-test config/batch_small.yaml
+# All currently installed large models
+uv run rama batch config/batch_code_test.yaml
 
 # Perplexity testing
-uv run rama batch-test config/batch_ppl.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
+uv run rama batch config/batch_code_test.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
 ```
 
 The batch runner:
 1. Starts each model sequentially
-2. Runs the test suite
-3. Saves JSON + CSV results to `results/`
-4. Stops the model before moving to the next
+2. Runs code and debugging tests under the same ten sampled seeds by default
+3. Reports the sampled-run mean and sample standard deviation, plus a verdict (`excellent`, `good`, `usable with review`, `not recommended`, or `broken`)
+4. Saves one aggregate JSON and one sortable CSV to `results/`; seed details and recurring failures are embedded in the JSON
+5. Stops the model before moving to the next
+
+### Screen a New Model
+
+Add the model to a batch YAML, then use a small sample to catch bad chat templates,
+empty answers, and non-executable code before spending time on a full run:
+
+```bash
+# Fast sanity screen: five code and five debugging tasks, one sampled seed
+uv run rama batch config/batch_new_model.yaml --max-tests 5 --single-seed --no-reasoning
+
+# Full comparison: every test under ten sampled seeds
+uv run rama batch config/batch_new_model.yaml --no-reasoning
+
+# One already-running server; pass its template switch if it is not standard
+uv run rama test 11435 --max-tests 5 --no-reasoning --reasoning-template-key reasoning
+
+# Start one discovered model, test it, then stop it
+uv run rama run MyNewModel --max-tests 5 --no-reasoning
+```
+
+`broken` means the evaluation pipeline was unreliable (for example empty responses
+or code that could not run), so fix the template/server configuration before judging
+model quality. `not recommended` means it ran reliably but scored poorly. The
+aggregate CSV is intended for sorting models; the JSON contains the evidence behind
+each verdict.
 
 ### Batch Config Format
 
@@ -381,16 +431,22 @@ The batch runner:
 
 ```bash
 # Custom starting port (models run on sequential ports)
-uv run rama batch-test config/batch_large.yaml --start-port 11440
+uv run rama batch config/batch_code_test.yaml --start-port 11440
 
 # Custom output directory
-uv run rama batch-test config/batch_large.yaml --output-dir my_results
+uv run rama batch config/batch_code_test.yaml --output-dir my_results
 
 # Fixed seed across all runs
-uv run rama batch-test config/batch_large.yaml --seed 42
+uv run rama batch config/batch_code_test.yaml --seed 42
 
 # Specific categories
-uv run rama batch-test config/batch_large.yaml --categories code
+uv run rama batch config/batch_code_test.yaml --categories code
+
+# Limit each category for a fast screen
+uv run rama batch config/batch_code_test.yaml --max-tests 5 --single-seed
+
+# Set the number of sampled family runs (default: 10)
+uv run rama batch config/batch_code_test.yaml --seeds 20
 ```
 
 ### Needle-in-a-Haystack Testing
@@ -403,8 +459,8 @@ rama nihs 11435 book.txt -n beginning,middle,end
 rama nihs 11435 book.txt -n beginning,25%,middle,75%,end
 
 # Batch mode (multiple models, KV quants, context sizes)
-rama nihs config/batch_large.yaml wikitext-2/wiki.train.tokens
-rama nihs config/batch_large.yaml text.txt -s 8192,32768,65536 -q f16,q8_0
+rama batch config/batch_code_test.yaml --type nihs --text wikitext-2/wiki.train.tokens
+rama batch config/batch_code_test.yaml --type nihs --text text.txt --ctx-sizes 8192,32768,65536
 
 # Enhanced mode (multi-needle + distractors, auto-starts model)
 rama nihs --enhanced -m qwen27b -n 10 -d lexical,topical,irrelevant
@@ -439,8 +495,7 @@ uv run rama status 11435
 # Run perplexity benchmark
 uv run rama perplexity qwen27b path/to/text.txt
 
-# Run llama-bench (native benchmark, no server needed)
-uv run rama llama-bench qwen27b
-uv run rama llama-bench qwen27b -p 1024 -n 256 -r 3
-uv run rama llama-bench qwen27b -o json
+# Benchmark a running server via its API
+uv run rama bench 11435
+uv run rama bench 11435 -p 1024 -n 256
 ```
