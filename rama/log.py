@@ -1,10 +1,13 @@
 """Logging setup for rama."""
 
 import logging
+import os
 
 
-def setup_logging(verbose: bool = False) -> logging.Logger:
+def setup_logging(verbose: bool | None = None) -> logging.Logger:
     """Setup and return the main logger."""
+    if verbose is None:
+        verbose = os.environ.get("RAMA_VERBOSE", "").lower() in ("1", "true", "yes")
     logger = logging.getLogger("rama")
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)
 

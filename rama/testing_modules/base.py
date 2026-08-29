@@ -70,9 +70,9 @@ class TestSuiteResult:
             return None
         return sum(scores) / len(scores)
 
-    def add_result(self, name: str, score: float | None = None, **kwargs) -> None:
+    def add_result(self, name: str, score: float | None = None, **kwargs: Any) -> None:
         """Add a single result.
-        
+
         Args:
             name: Test name/identifier
             score: Numeric score (optional)
@@ -110,6 +110,22 @@ class TestSuiteResult:
         }
 
 
+class DurationTracker:
+    """Measure a module operation and report its elapsed time on exit."""
+
+    def __init__(self, label: str, module: TestModule) -> None:
+        self.label = label
+        self.module = module
+        self.start = time.perf_counter()
+
+    def __enter__(self) -> DurationTracker:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        elapsed = time.perf_counter() - self.start
+        self.module._log(f"{self.label}: {elapsed:.1f}s", "dim")
+
+
 class TestModule(abc.ABC):
     """Base class for all test modules.
 
@@ -135,19 +151,9 @@ class TestModule(abc.ABC):
         self._port: int | None = None
 
     @abc.abstractmethod
-    def setup(self) -> None:
-        """Prepare environment (start model, load context, etc.)."""
-        pass
-
-    @abc.abstractmethod
     def run(self) -> TestSuiteResult:
         """Execute the core test logic."""
         ...
-
-    @abc.abstractmethod
-    def teardown(self) -> None:
-        """Clean up (stop model, clear ports, etc.)."""
-        pass
 
     def _start_model(
         self,
@@ -155,54 +161,43 @@ class TestModule(abc.ABC):
         ctx_size: int | None = None,
         ctk: str | None = None,
         ctv: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> int:
         """Start model on given port. Returns the port."""
-        from rama.launch import start_model
+        from rama.launch import ModelStartConfig, start_model
 
         result = start_model(
-            self.model,
-            port=port,
-            ctx_size=ctx_size,
-            ctk=ctk,
-            ctv=ctv,
-            config=self.config,
-            config_item=kwargs,
+            ModelStartConfig(
+                model=self.model,
+                port=port,
+                ctx_size=ctx_size,
+                ctk=ctk,
+                ctv=ctv,
+                config=self.config,
+                config_item=kwargs,
+            )
         )
         return result.port
 
     def _stop_model(self, port: int) -> None:
         """Stop model on given port."""
-        from rama.launch import stop_model
-        from rama.launch import _wait_for_port_free
+        from rama.launch import _wait_for_port_free, stop_model
 
         stop_model(port, self.config)
         _wait_for_port_free(port, timeout=10.0)
 
-    def _run_chat(self, port: int, prompt: str, **kwargs) -> str:
+    def _run_chat(self, port: int, prompt: str, **kwargs: Any) -> str:
         """Send chat completion request."""
-        from rama.testing import run_chat_completion
+        from rama.testing import ChatCompletionConfig, run_chat_completion
 
-        return run_chat_completion(port, prompt, host=self.host, **kwargs)
+        return run_chat_completion(
+            ChatCompletionConfig(port=port, prompt=prompt, host=self.host, **kwargs)
+        )
 
     def _log(self, msg: str, style: str = "cyan") -> None:
         """Print styled log message."""
         console.print(f"[{style}][{self.model.name[:30]:<30}][/style] {msg}")
 
-    def _track_duration(self, label: str) -> "DurationTracker":
+    def _track_duration(self, label: str) -> DurationTracker:
         """Measure and log duration as a context manager."""
-
-        class DurationTracker:
-            def __init__(self, lbl: str, mod: TestModule) -> None:
-                self.lbl = lbl
-                self.mod = mod
-                self.start = time.perf_counter()
-
-            def __enter__(self) -> "DurationTracker":
-                return self
-
-            def __exit__(self, *args: Any) -> None:
-                elapsed = time.perf_counter() - self.start
-                self.mod._log(f"{self.lbl}: {elapsed:.1f}s", "dim")
-
         return DurationTracker(label, self)

@@ -36,7 +36,20 @@ families:
     top_k: 20
     top_p: 0.95
     min_p: 0.0
-    repetition_penalty: 1.0
+    repeat_penalty: 1.0
+
+  qwen3.8:
+    # Qwen3.8 thinks by default. These are its official thinking-mode
+    # sampling parameters; preserve the standard Qwen context policy.
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 112640
+    temp: 1.0
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 0.0
 
   gemma:
     chat_template_file: gemma4.jinja
@@ -80,7 +93,7 @@ families:
     top_k: 64
     top_p: 0.95
     min_p: 0.01
-    repetition_penalty: 1.0
+    repeat_penalty: 1.0
 
   nemotron:
     small_ctx: 24576

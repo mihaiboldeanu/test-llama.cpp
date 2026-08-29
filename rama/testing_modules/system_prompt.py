@@ -46,11 +46,15 @@ def get_system_prompt(
     return None
 
 
-def get_code_system_prompt(model_name: str, custom_prompt: str | None = None) -> str | None:
+def get_code_system_prompt(
+    model_name: str, custom_prompt: str | None = None
+) -> str | None:
     """Get system prompt for code tests."""
     return get_system_prompt(model_name, "code", custom_prompt)
 
 
-def get_debug_system_prompt(model_name: str, custom_prompt: str | None = None) -> str | None:
+def get_debug_system_prompt(
+    model_name: str, custom_prompt: str | None = None
+) -> str | None:
     """Get system prompt for debugging tests."""
     return get_system_prompt(model_name, "debugging", custom_prompt)

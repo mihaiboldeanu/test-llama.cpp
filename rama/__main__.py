@@ -1,9 +1,7 @@
 import json
-import shutil
 import subprocess
 import time
 import urllib.request
-from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -13,14 +11,22 @@ from rich.table import Table
 
 from . import DEFAULT_CONFIG, Config
 from .context_test import format_context_results, run_needle_suite
-from .core import calc_kv_cache, detect_backend, discover_models, get_running_models, is_port_used
-from .launch import build_backend, start_model, stop_model
+from .core import (
+    calc_kv_cache,
+    detect_backend,
+    discover_models,
+    get_preferred_ctx,
+    get_running_models,
+    is_port_used,
+)
+from .launch import ModelStartConfig, build_backend, resolve, start_model, stop_model
 from .testing import (
+    TestRunConfig,
     discover_tests,
     format_markdown,
     generate_online_eval_prompt,
     run_tests,
-    save_results_csv,
+    summarize_evaluation,
 )
 from .testing_modules.batch_runner import BatchRunner, BatchRunnerConfig
 
@@ -28,6 +34,28 @@ console = Console()
 
 # Default test categories for "all"
 DEFAULT_TEST_CATEGORIES = ["code", "debugging"]
+
+
+def print_evaluation_summary(results) -> None:
+    """Print the decision-oriented summary shared by test and run commands."""
+    evaluation = summarize_evaluation(results)
+    category_scores = ", ".join(
+        f"{category}={score:.1f}"
+        for category, score in evaluation["category_scores"].items()
+    )
+    details = (
+        f"completion {evaluation['completion_rate']:.0%}, "
+        f"execution {evaluation['execution_rate']:.0%}"
+    )
+    if category_scores:
+        details += f", {category_scores}"
+    console.print(f"[bold]Verdict: {evaluation['verdict']}[/bold] ({details})")
+    if evaluation["recurring_failures"]:
+        failures = ", ".join(
+            f"{item['category']}/{item['name']} ({item['count']}x)"
+            for item in evaluation["recurring_failures"][:3]
+        )
+        console.print(f"[dim]Recurring failures: {failures}[/dim]")
 
 
 def get_config(config_path: str | None = None) -> Config:
@@ -122,10 +150,10 @@ def start(
         "--ctx",
         help="Context size (auto calculated if not set)",
     ),
-    fit: bool = typer.Option(
-        True,
+    fit: bool | None = typer.Option(
+        None,
         "--fit/--no-fit",
-        help="Auto-fit model to VRAM (default: on)",
+        help="Override the model's auto-fit setting (default: model setting, otherwise on)",
     ),
     foreground: bool = typer.Option(
         False,
@@ -169,6 +197,11 @@ def start(
         "-c",
         help="Config file path",
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print launch command without starting the server",
+    ),
 ) -> None:
     """Start a model."""
     cfg = get_config(config_path)
@@ -193,36 +226,72 @@ def start(
 
     # Fit mode options
     config_item = {}
-    config_item["fit"] = fit
+    if fit is not None:
+        config_item["fit"] = fit
     if seed is not None:
         config_item["seed"] = seed
 
     # Show what context we'll get
     if ctx_size is None:
-        ctx, qk, qv = calc_kv_cache(model.size_gb, model.family, cfg)
+        ctx, qk, qv = calc_kv_cache(
+            model.size_gb,
+            model.family,
+            cfg,
+            metadata=model.metadata,
+            ctk=ctk,
+            ctv=ctv,
+        )
+        preferred_ctx = get_preferred_ctx(model.size_gb, model.family, cfg)
+        launch_ctx = preferred_ctx
+        if mtp:
+            family_params = (cfg.get("families") or {}).get(model.family, {})
+            model_overrides = (cfg.get("models") or {}).get(model.name, {})
+            ratio_opts = {**family_params, **model_overrides, **config_item}
+            launch_ctx = int(
+                launch_ctx
+                * resolve(
+                    ratio_opts, family_params, "mtp_ctx_ratio", 0.8, cfg
+                )
+            )
+        # llama.cpp pads the requested context up to a multiple of 256
+        # (GGML_PAD in llama-context.cpp), so the server's n_ctx_slot is the
+        # aligned value, not the raw configured one.
+        effective_ctx = ((launch_ctx + 255) // 256) * 256
         console.print(
             f"[dim]Model: {model.name} ({model.size_gb}GB, {model.family})[/dim]",
         )
-        console.print(f"[dim]Auto ctx={ctx}, ctk={qk}, ctv={qv}[/dim]")
-        if fit:
+        console.print(f"[dim]Launch ctx={effective_ctx}, ctk={qk}, ctv={qv}[/dim]")
+        if ctx != launch_ctx:
+            console.print(
+                f"[dim]Conservative F16 fit estimate={ctx}; "
+                "using the configured ctx instead[/dim]"
+            )
+        if fit is not False:
             console.print("[dim]--fit: auto-fit model to VRAM[/dim]")
 
     try:
         result = start_model(
-            model,
-            backend=backend,
-            port=port,
-            ctx_size=ctx_size,
-            ctk=ctk,
-            ctv=ctv,
-            seed=seed,
-            config=cfg,
-            config_item=config_item,
-            foreground=foreground,
-            mtp=mtp,
-            mtp_n_max=mtp_n_max,
-            mtp_n_min=mtp_n_min,
+            ModelStartConfig(
+                model=model,
+                backend=backend,
+                port=port,
+                ctx_size=ctx_size,
+                ctk=ctk,
+                ctv=ctv,
+                seed=seed,
+                config=cfg,
+                config_item=config_item,
+                foreground=foreground,
+                mtp=mtp,
+                mtp_n_max=mtp_n_max,
+                mtp_n_min=mtp_n_min,
+                dry_run=dry_run,
+            )
         )
+        if dry_run:
+            console.print("\n[dim]Would launch:[/dim]")
+            console.print("  " + " ".join(result.argv))
+            return
         if foreground:
             console.print("\n[cyan]Server stopped.[/cyan]")
             return
@@ -393,21 +462,25 @@ def init(
     console.print(f"[green]Created config: {dst}[/green]")
     console.print("[dim]Edit it to customize paths![/dim]")
 
-
 @app.command()
 def test(
     port: int = typer.Argument(..., help="Port of running model"),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
+    ),
     categories: str = typer.Option(
         "all",
         "--categories",
-        "-c",
         help="Comma-separated: code,debugging,creative",
     ),
     judge_port: int | None = typer.Option(
         None,
         "--judge",
         "-j",
-        help="Port of judge model for scoring",
+        help="Judge model port",
     ),
     no_judge: bool = typer.Option(
         False,
@@ -426,9 +499,36 @@ def test(
         "-f",
         help="Output format: table, markdown, json, eval",
     ),
+    max_tokens: int = typer.Option(
+        2048,
+        "--max-tokens",
+        "-m",
+        help="Maximum tokens for model responses",
+    ),
+    max_tests: int | None = typer.Option(
+        None,
+        "--max-tests",
+        min=1,
+        help="Limit tests per category (useful for a quick model screen)",
+    ),
+    reasoning_template_key: str = typer.Option(
+        "enable_thinking",
+        "--reasoning-template-key",
+        help="Template variable used by this model family when toggling reasoning",
+    ),
+    reasoning_template_value: str | None = typer.Option(
+        None,
+        "--reasoning-template-value",
+        help="Template value used with --no-reasoning (for example: low)",
+    ),
+    no_reasoning: bool = typer.Option(
+        False,
+        "--no-reasoning",
+        help="Disable model reasoning (for faster code tests)",
+    ),
 ) -> None:
     """Run tests on a running model."""
-    # Parse categories
+    cfg = get_config(config_path)
     cats = DEFAULT_TEST_CATEGORIES if categories == "all" else categories.split(",")
 
     console.print(f"[cyan]Running tests on port {port}...[/cyan]")
@@ -437,10 +537,18 @@ def test(
 
     # Run tests
     result = run_tests(
-        port,
-        judge_port=judge_port,
-        categories=cats,
-        use_llm_judge=not no_judge,
+        TestRunConfig(
+            port=port,
+            judge_port=judge_port,
+            categories=cats,
+            use_llm_judge=not no_judge,
+            max_tokens=max_tokens,
+            reasoning=False if no_reasoning else None,
+            reasoning_template_key=reasoning_template_key,
+            reasoning_template_value=reasoning_template_value,
+            max_tests_per_category=max_tests,
+            config=cfg._data,
+        )
     )
 
     if output:
@@ -449,7 +557,6 @@ def test(
         console.print(f"[green]Results saved to {output_path}[/green]")
 
     if format == "eval":
-        # Generate copy/paste for online LLM eval
         console.print("\n[yellow]Copy the following for online evaluation:[/yellow]\n")
         console.print(generate_online_eval_prompt(result.results))
     elif format == "json":
@@ -457,34 +564,47 @@ def test(
             json.dumps(
                 {
                     "overall_score": result.overall_score,
+                    "evaluation": summarize_evaluation(result.results),
                     "tests": [(r.name, r.category, r.score) for r in result.results],
                 },
                 indent=2,
-            ),
+            )
         )
     elif format == "markdown":
         console.print(format_markdown(result))
     else:
-        # Table
         table = Table(title=f"Test Results (port {port})")
         table.add_column("Test")
         table.add_column("Category")
         table.add_column("Score", justify="right")
-
-        for r in result.results:
-            score_str = f"{r.score}/10" if r.score is not None else "N/A"
-            table.add_row(r.name, r.category, score_str)
-
+        for test_result in result.results:
+            score = (
+                f"{test_result.score}/10"
+                if test_result.score is not None
+                else "N/A"
+            )
+            table.add_row(test_result.name, test_result.category, score)
         console.print(table)
-        console.print(f"\n[green]Overall: {result.overall_score:.1f}/10[/green]")
+        if result.overall_score is not None:
+            console.print(f"\n[green]Overall: {result.overall_score:.1f}/10[/green]")
+        else:
+            console.print("\n[yellow]Overall: N/A[/yellow]")
+        print_evaluation_summary(result.results)
 
 
 @app.command()
 def tests(
     show: bool = typer.Option(False, "--show", "-s", help="Show available tests"),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
+    ),
 ) -> None:
     """List available tests."""
-    tests_dict = discover_tests()
+    cfg = get_config(config_path)
+    tests_dict = discover_tests(cfg)
 
     for category, test_files in tests_dict.items():
         console.print(f"\n[cyan]{category.upper()}:[/cyan]")
@@ -517,7 +637,7 @@ def ctxinfo(
     table.add_column("KV Type")
 
     for m in models:
-        ctx, qk, qv = calc_kv_cache(m.size_gb, m.family, cfg)
+        ctx, qk, qv = calc_kv_cache(m.size_gb, m.family, cfg, metadata=m.metadata)
         kv = f"{qk}/{qv}"
         table.add_row(m.name[:35], f"{m.size_gb}GB", m.family, f"{ctx:,}", kv)
 
@@ -540,6 +660,12 @@ def context(
     seed: int | None = typer.Option(
         None, "--seed", help="Random seed for needle generation"
     ),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
+    ),
 ) -> None:
     """Needle-in-a-haystack test - hide a token in text and see if the model finds it.
 
@@ -561,15 +687,21 @@ def context(
     console.print(f"Files: {', '.join(f.name for f in file_paths)}")
     console.print(f"Needle locations: {locations}")
 
-    results = run_needle_suite(port, file_paths, locations, seed=seed)
+    cfg = get_config(config_path)
+    host = cfg.get("host", "127.0.0.1")
+    results = run_needle_suite(port, file_paths, locations, seed=seed, host=host)
 
     console.print("\n" + format_context_results(results))
 
 
 @app.command()
 def nihs(
-    port: int | None = typer.Argument(None, help="Port of running model (context mode)"),
-    file_or_config: str | None = typer.Argument(None, help="Text file (context mode) or batch config (batch mode)"),
+    port: int | None = typer.Argument(
+        None, help="Port of running model (context mode)"
+    ),
+    file_or_config: str | None = typer.Argument(
+        None, help="Text file (context mode) or batch config (batch mode)"
+    ),
     needle_loc: str = typer.Option(
         "beginning,middle,end",
         "--needle-loc",
@@ -583,7 +715,10 @@ def nihs(
         False, "--enhanced", help="Run enhanced NIHS with multi-needle and distractors"
     ),
     difficulty: str = typer.Option(
-        "easy", "--difficulty", "-d", help="Difficulty level: easy, medium, hard, expert, or all"
+        "easy",
+        "--difficulty",
+        "-d",
+        help="Difficulty level: easy, medium, hard, expert, or all",
     ),
     model_name: str | None = typer.Option(
         None, "-m", "--model", help="Model name for enhanced/difficulty mode"
@@ -595,7 +730,9 @@ def nihs(
         8, "--num-needles", help="Number of needles for enhanced mode"
     ),
     distractor_types: str = typer.Option(
-        "lexical,topical,irrelevant", "--distractors", help="Comma-separated distractor types"
+        "lexical,topical,irrelevant",
+        "--distractors",
+        help="Comma-separated distractor types",
     ),
     config_path: str | None = typer.Option(
         None, "--config", "-c", help="Config file path"
@@ -613,7 +750,9 @@ def nihs(
 
     # Enhanced mode
     if enhanced:
-        _run_enhanced_nihs(cfg, model_name, ctx_size, num_needles, distractor_types, seed)
+        _run_enhanced_nihs(
+            cfg, model_name, ctx_size, num_needles, distractor_types, seed
+        )
         return
 
     # Difficulty mode
@@ -623,7 +762,7 @@ def nihs(
 
     # Batch mode
     if port is None and file_or_config and Path(file_or_config).suffix == ".yaml":
-        _run_batch_nihs(cfg, file_or_config, needle_loc, seed)
+        _run_batch_nihs(cfg, file_or_config, needle_loc, seed, config_path)
         return
 
     # Context mode (default)
@@ -647,7 +786,7 @@ def nihs(
 
 
 def _run_enhanced_nihs(
-    cfg: dict,
+    cfg: Config,
     model_name: str | None,
     ctx_size: int | None,
     num_needles: int,
@@ -656,27 +795,26 @@ def _run_enhanced_nihs(
 ) -> None:
     """Run enhanced NIHS with multi-needle and distractors."""
     from rama.testing_modules.enhanced_nihs import (
-        Distractor,
         EnhancedNIHSConfig,
         EnhancedNIHSModule,
-        Needle,
     )
 
     if not model_name:
         console.print("[red]Enhanced mode requires -m <model_name>[/red]")
         raise typer.Exit(1)
 
-    cfg_obj = Config.load(cfg)
     models = discover_models(cfg)
-    model = next((m for m in models if m.name == model_name or model_name in m.aliases), None)
+    model = next(
+        (m for m in models if m.name == model_name or model_name in m.path.name), None
+    )
     if model is None:
         console.print(f"[red]Model not found: {model_name}[/red]")
         console.print("[dim]Available models:[/dim]")
         for m in models:
-            console.print(f"  - {m.name} ({', '.join(m.aliases)})")
+            console.print(f"  - {m.name}")
         raise typer.Exit(1)
 
-    context_size = ctx_size or cfg_obj.context_size or 65536
+    context_size = ctx_size or cfg.get("context_size", 65536)
     dist_types = [t.strip() for t in distractor_types.split(",")]
 
     nihs_config = EnhancedNIHSConfig(
@@ -687,20 +825,24 @@ def _run_enhanced_nihs(
     )
 
     module = EnhancedNIHSModule(cfg, model, nihs_config)
-    console.print(f"[cyan]Running enhanced NIHS on {model.name} (ctx={context_size})...[/cyan]")
+    console.print(
+        f"[cyan]Running enhanced NIHS on {model.name} (ctx={context_size})...[/cyan]"
+    )
     result = module.run()
 
     if result.metadata:
         acc = result.metadata.get("accuracy", 0)
         found = result.metadata.get("found", 0)
         total = result.metadata.get("total", 0)
-        console.print(f"\n[green]Enhanced NIHS complete: {found}/{total} found ({acc:.0%})[/green]")
+        console.print(
+            f"\n[green]Enhanced NIHS complete: {found}/{total} found ({acc:.0%})[/green]"
+        )
     if result.error:
         console.print(f"[red]Error: {result.error}[/red]")
 
 
 def _run_difficulty_nihs(
-    cfg: dict,
+    cfg: Config,
     model_name: str | None,
     ctx_size: int | None,
     difficulty: str,
@@ -716,18 +858,19 @@ def _run_difficulty_nihs(
         console.print("[red]Difficulty mode requires -m <model_name>[/red]")
         raise typer.Exit(1)
 
-    cfg_obj = Config.load(cfg)
     models = discover_models(cfg)
-    model = next((m for m in models if m.name == model_name or model_name in m.aliases), None)
+    model = next(
+        (m for m in models if m.name == model_name or model_name in m.path.name), None
+    )
     if model is None:
         console.print(f"[red]Model not found: {model_name}[/red]")
         console.print("[dim]Available models:[/dim]")
         for m in models:
-            console.print(f"  - {m.name} ({', '.join(m.aliases)})")
+            console.print(f"  - {m.name}")
         raise typer.Exit(1)
 
     difficulty_levels = ["easy"] if difficulty == "easy" else difficulty.split(",")
-    context_size = ctx_size or cfg_obj.context_size or 65536
+    context_size = ctx_size or cfg.get("context_size", 65536)
 
     difficulty_config = ContextDifficultyConfig(
         context_size=context_size,
@@ -751,35 +894,38 @@ def _run_difficulty_nihs(
                 scores = [r.get("score", 0) for r in data.get("results", [])]
                 avg = sum(scores) / len(scores) if scores else 0
                 wiki_tokens = data.get("wiki_tokens_injected", 0)
-                console.print(f"[green]{level}: avg score={avg:.1f}/10 (wiki tokens injected: {wiki_tokens})[/green]")
+                console.print(
+                    f"[green]{level}: avg score={avg:.1f}/10 (wiki tokens injected: {wiki_tokens})[/green]"
+                )
     if result.error:
         console.print(f"[red]Error: {result.error}[/red]")
 
 
 def _run_batch_nihs(
-    cfg: dict,
-    config_path: str,
+    cfg: Config,
+    batch_config_path: str,
     needle_loc: str,
     seed: int | None,
+    rama_config_path: str | None,
 ) -> None:
     """Run NIHS tests across multiple models from batch config."""
-    from rama.testing_modules.batch_runner import BatchRunner
-
-    if not Path(config_path).exists():
-        console.print(f"[red]Config not found: {config_path}[/red]")
+    if not Path(batch_config_path).exists():
+        console.print(f"[red]Config not found: {batch_config_path}[/red]")
         raise typer.Exit(1)
 
     locations = [loc.strip() for loc in needle_loc.split(",")]
-    cfg_obj = Config.load(cfg)
-
-    with open(config_path) as f:
-        batch_config = yaml.safe_load(f) or {}
-
-    console.print(f"[cyan]Running batch NIHS from {config_path}...[/cyan]")
+    console.print(f"[cyan]Running batch NIHS from {batch_config_path}...[/cyan]")
     console.print(f"Needle locations: {locations}")
 
-    runner = BatchRunner(cfg_obj, batch_config, test_type="nihs")
-    results = runner.run_nihs_batch(Path(config_path).parent, locations, seed)
+    runner = BatchRunner(
+        BatchRunnerConfig(
+            config_file=batch_config_path,
+            batch_type="nihs",
+            config_path=rama_config_path,
+            needle_loc=needle_loc,
+        )
+    )
+    results = runner.run_nihs_batch(Path(batch_config_path).parent, locations, seed)
 
     if results:
         console.print("\n[bold]=== Batch NIHS Results ===[/bold]")
@@ -832,6 +978,12 @@ def run(
         help="Min draft tokens for MTP (default: 0)",
     ),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
+    max_tests: int | None = typer.Option(
+        None,
+        "--max-tests",
+        min=1,
+        help="Limit tests per category (useful for a quick model screen)",
+    ),
     judge_port: int | None = typer.Option(
         None,
         "--judge",
@@ -839,11 +991,9 @@ def run(
         help="Judge model port",
     ),
     output: str | None = typer.Option(None, "--output", "-o", help="Results file"),
-    config_path: str | None = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Config file path",
+    config_path: str | None = typer.Option(None, "--config", help="Config file path"),
+    no_reasoning: bool = typer.Option(
+        False, "--no-reasoning", help="Disable model reasoning for the test run"
     ),
 ) -> None:
     """Start model, run tests, then stop model."""
@@ -874,18 +1024,21 @@ def run(
         # Start model
         console.print(f"[cyan]Starting {model.name}...[/cyan]")
         result = start_model(
-            model,
-            backend=backend,
-            port=port,
-            ctx_size=ctx_size,
-            ctk=ctk,
-            ctv=ctv,
-            seed=seed,
-            config=cfg,
-            config_item=config_item,
-            mtp=mtp,
-            mtp_n_max=mtp_n_max,
-            mtp_n_min=mtp_n_min,
+            ModelStartConfig(
+                model=model,
+                backend=backend,
+                port=port,
+                ctx_size=ctx_size,
+                ctk=ctk,
+                ctv=ctv,
+                seed=seed,
+                config=cfg,
+                config_item=config_item,
+                mtp=mtp,
+                mtp_n_max=mtp_n_max,
+                mtp_n_min=mtp_n_min,
+                reasoning=False if no_reasoning else None,
+            )
         )
         console.print(f"[green]Model started on port {result.port}[/green]")
 
@@ -897,10 +1050,29 @@ def run(
                 if categories != "all"
                 else DEFAULT_TEST_CATEGORIES
             )
+            profile = result.profile
+            capabilities = profile.capabilities if profile is not None else None
             result_test = run_tests(
-                result.port,
-                judge_port=judge_port,
-                categories=cats,
+                TestRunConfig(
+                    port=result.port,
+                    judge_port=judge_port,
+                    categories=cats,
+                    max_tests_per_category=max_tests,
+                    reasoning=False if no_reasoning else None,
+                    reasoning_template_key=(
+                        capabilities.reasoning_template_key
+                        if capabilities and capabilities.reasoning_template_key
+                        else "enable_thinking"
+                    ),
+                    reasoning_template_value=(
+                        capabilities.reasoning_disabled_value
+                        if no_reasoning and capabilities is not None
+                        else None
+                    ),
+                    sampler=profile.sampler if profile is not None else None,
+                    capabilities=capabilities,
+                    config=cfg._data,
+                )
             )
 
             if output:
@@ -916,8 +1088,13 @@ def run(
                     table.add_row(r.name, r.category, score_str)
                 console.print(table)
                 console.print(
-                    f"\n[green]Overall: {result_test.overall_score:.1f}/10[/green]",
+                    (
+                        f"\n[green]Overall: {result_test.overall_score:.1f}/10[/green]"
+                        if result_test.overall_score is not None
+                        else "\n[yellow]Overall: N/A[/yellow]"
+                    ),
                 )
+                print_evaluation_summary(result_test.results)
         finally:
             # Stop model even if tests fail.
             console.print("[cyan]Stopping model...[/cyan]")
@@ -1073,6 +1250,29 @@ def batch(
     needle_loc: str = typer.Option(
         "beginning,middle,end", "--needle-loc", "-n", help="Needle locations"
     ),
+    max_tokens: int | None = typer.Option(
+        None, "--max-tokens", help="Override max tokens for all models"
+    ),
+    max_tests: int | None = typer.Option(
+        None,
+        "--max-tests",
+        min=1,
+        help="Limit tests per category (useful for a quick model screen)",
+    ),
+    seeds: int = typer.Option(
+        10,
+        "--seeds",
+        min=1,
+        help="Number of sampled family runs per model (default: 10)",
+    ),
+    single_seed: bool = typer.Option(
+        False,
+        "--single-seed",
+        help="Run one sampled family seed instead of the 10-seed sweep",
+    ),
+    no_reasoning: bool = typer.Option(
+        False, "--no-reasoning", help="Disable reasoning for all models"
+    ),
 ) -> None:
     """Run batch of models from config file.
 
@@ -1083,10 +1283,10 @@ def batch(
       kv         - KV quant comparison batch
 
     Examples:
-       rama batch config/batch_large.yaml --type code
-       rama batch config/batch_ppl.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
-       rama batch config/batch_large.yaml --type nihs --text book.txt
-       rama batch config/batch_large.yaml --type kv --kvs f16,q8_0
+       rama batch config/batch_code_test.yaml --type code
+       rama batch config/batch_code_test.yaml --type perplexity --text wikitext-2/wiki.valid.tokens
+       rama batch config/batch_code_test.yaml --type nihs --text book.txt
+       rama batch config/batch_code_test.yaml --type kv --kvs f16,q8_0
     """
     batch_config = BatchRunnerConfig(
         config_file=config_file,
@@ -1101,10 +1301,94 @@ def batch(
         kv_quants=kv_quants,
         ctx_sizes=ctx_sizes,
         needle_loc=needle_loc,
+        max_tokens=max_tokens,
+        reasoning=False if no_reasoning else None,
+        max_tests_per_category=max_tests,
+        multi_seed=not single_seed,
+        seeds=seeds,
     )
 
     runner = BatchRunner(batch_config)
     runner.run()
+
+
+@app.command()
+def explain(
+    model_name: str = typer.Argument(..., help="Model name or alias"),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Config file path",
+    ),
+) -> None:
+    """Show resolved profile for a model (dry-run mode)."""
+    from dataclasses import asdict
+
+    from .domain.models import ModelInfo as DomainModelInfo
+    from .domain.resolver import ProfileResolver
+    from .families import get_registry
+
+    cfg = get_config(config_path)
+    models = discover_models(cfg)
+
+    model = None
+    for m in models:
+        if model_name in m.name or model_name in m.path.name:
+            model = m
+            break
+
+    if model is None:
+        console.print(f"[red]Model not found: {model_name}[/red]")
+        raise typer.Exit(1)
+
+    domain_model = DomainModelInfo(
+        name=model.name,
+        path=model.path,
+        size_bytes=int(model.size_gb * 1024**3),
+        family_key=model.family,
+        quantization=model.quant,
+    )
+
+    # Load family definition from registry
+    reg = get_registry()
+    family_def = reg.get(model.family)
+
+    family_params = cfg.families.get(model.family, {})
+    model_overrides = (cfg.get("models", {}) or {}).get(model.name, {})
+    resolver = ProfileResolver(family_definition=family_def)
+    profile = resolver.resolve(
+        domain_model,
+        global_config=cfg._data,
+        family_override=family_params or None,
+        model_override=model_overrides or None,
+    )
+
+    console.print(f"[bold]Model:[/bold] {profile.model.name}")
+    console.print(f"[bold]Family:[/bold] {profile.model.family_key}")
+    if family_def:
+        console.print(f"[bold]Quant:[/bold] {profile.model.quantization or 'unknown'}")
+        console.print(f"[bold]Size:[/bold] {profile.model.size_gb:.1f} GB")
+        console.print()
+
+    def _print_section(title: str, dataclass_obj, prov_prefix: str):
+        console.print(f"[bold]{title}:[/bold]")
+        for k, v in asdict(dataclass_obj).items():
+            prov = profile.provenance.get(f"{prov_prefix}.{k}", "builtin")
+            console.print(f"  {k}: {v} [dim]({prov})[/dim]")
+        console.print()
+
+    _print_section("Sampler", profile.sampler, "sampler")
+    _print_section("Context", profile.context, "context")
+    _print_section("Memory", profile.memory, "memory")
+    _print_section("Launch", profile.launch, "launch")
+
+    if profile.capabilities.supports_reasoning or profile.capabilities.reasoning_template_key:
+        console.print("[bold]Capabilities:[/bold]")
+        for k, v in asdict(profile.capabilities).items():
+            prov = profile.provenance.get(f"capabilities.{k}", "builtin")
+            console.print(f"  {k}: {v} [dim]({prov})[/dim]")
+        console.print()
 
 
 if __name__ == "__main__":

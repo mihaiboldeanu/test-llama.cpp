@@ -1,15 +1,15 @@
 import csv
 import json
-import subprocess
-import sys
+import statistics
+from dataclasses import dataclass
 from pathlib import Path
 
+from .domain.models import FamilyCapabilities, SamplerSettings
 from .log import setup_logging
 from .testing_modules.base import TestResult, TestSuiteResult
 from .testing_modules.code_runner import load_task, run_task
 
 logger = setup_logging()
-PYTHON_BIN = sys.executable or "python"
 
 
 def get_tests_dir(config=None) -> Path:
@@ -34,50 +34,98 @@ def discover_tests(config=None) -> dict[str, list[Path]]:
     return categories
 
 
-def run_chat_completion(
-    port: int,
-    prompt: str,
-    temperature: float = 0.0,
-    max_tokens: int = 4096,
-    seed: int = 42,
-    retries: int = 2,
-    host: str = "127.0.0.1",
-    system_prompt: str | None = None,
-    conversation: list[dict] | None = None,
-    top_p: float = 1.0,
-    top_k: int | None = None,
-    min_p: float | None = None,
-    timeout_seconds: int = 120,
-) -> str:
-    """Call the model via llama.cpp API with retry support.
+@dataclass
+class ChatCompletionConfig:
+    """Configuration for a chat completion request.
 
-    If conversation is provided, sends the full message history
-    (system + previous exchanges + new user prompt) to maintain
-    proper OpenAI-style conversation continuity.
+    Sampler and reasoning fields can be derived from a ResolvedModelProfile via the
+    optional `sampler` and `capabilities` parameters, or set individually for
+    backward compatibility. When provided, `sampler` overrides individual sampler fields.
     """
+
+    port: int
+    prompt: str
+    temperature: float = 0.0
+    max_tokens: int = 4096
+    seed: int = 42
+    retries: int = 2
+    host: str = "127.0.0.1"
+    system_prompt: str | None = None
+    conversation: list[dict] | None = None
+    top_p: float = 1.0
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    repeat_penalty: float | None = None
+    timeout_seconds: int = 120
+    reasoning: bool | None = None
+    reasoning_template_key: str = "enable_thinking"
+    reasoning_template_value: bool | str | None = None
+
+    # New profile-derived fields (override individual fields when set)
+    sampler: SamplerSettings | None = None
+    capabilities: FamilyCapabilities | None = None
+
+    def __post_init__(self):
+        if self.sampler is not None:
+            self.temperature = self.sampler.temperature
+            self.top_p = self.sampler.top_p
+            self.top_k = self.sampler.top_k
+            self.min_p = self.sampler.min_p
+            self.presence_penalty = self.sampler.presence_penalty
+            self.repeat_penalty = self.sampler.repeat_penalty
+
+        if (
+            self.capabilities is not None
+            and self.reasoning_template_key == "enable_thinking"
+            and self.capabilities.reasoning_template_key
+        ):
+            # Use family's template key unless explicitly overridden.
+            self.reasoning_template_key = self.capabilities.reasoning_template_key
+
+
+def run_chat_completion(cfg: ChatCompletionConfig) -> str:
+    """Call the model via llama.cpp API with retry support."""
     import urllib.error
     import urllib.request
 
-    url = f"http://{host}:{port}/v1/chat/completions"
-    if conversation is not None:
-        messages = list(conversation)
-        messages.append({"role": "user", "content": prompt})
+    url = f"http://{cfg.host}:{cfg.port}/v1/chat/completions"
+    if cfg.conversation is not None:
+        messages = list(cfg.conversation)
+        messages.append({"role": "user", "content": cfg.prompt})
     else:
-        messages = [{"role": "user", "content": prompt}]
-        if system_prompt:
-            messages.insert(0, {"role": "system", "content": system_prompt})
+        messages = [{"role": "user", "content": cfg.prompt}]
+        if cfg.system_prompt:
+            messages.insert(0, {"role": "system", "content": cfg.system_prompt})
     data = {
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "seed": seed,
-        "top_p": top_p,
+        "temperature": cfg.temperature,
+        "max_tokens": cfg.max_tokens,
+        "seed": cfg.seed,
+        "top_p": cfg.top_p,
         "stream": False,
     }
-    if top_k is not None:
-        data["top_k"] = top_k
-    if min_p is not None:
-        data["min_p"] = min_p
+    if cfg.top_k is not None:
+        data["top_k"] = cfg.top_k
+    if cfg.min_p is not None:
+        data["min_p"] = cfg.min_p
+    if cfg.presence_penalty is not None:
+        data["presence_penalty"] = cfg.presence_penalty
+    if cfg.repeat_penalty is not None:
+        data["repeat_penalty"] = cfg.repeat_penalty
+    if cfg.reasoning is not None:
+        # llama.cpp controls this through template parameters. Families select
+        # the key their embedded template actually understands.
+        template_value = (
+            cfg.reasoning_template_value
+            if cfg.reasoning_template_value is not None
+            else cfg.reasoning
+        )
+        data["chat_template_kwargs"] = {
+            cfg.reasoning_template_key: (template_value),
+        }
+        if isinstance(template_value, bool):
+            data["reasoning"] = cfg.reasoning
 
     req = urllib.request.Request(
         url,
@@ -85,28 +133,32 @@ def run_chat_completion(
         headers={"Content-Type": "application/json"},
     )
 
-    for attempt in range(retries + 1):
+    for attempt in range(cfg.retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(req, timeout=cfg.timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+                result = json.loads(raw)
                 choice = result.get("choices", [{}])[0]
                 content = choice.get("message", {}).get("content", "")
-                if content == "":
+                if content == "" or "message" not in choice:
                     logger.warning(
-                        "Empty completion received (finish_reason=%s, choice_keys=%s)",
+                        "Empty/missing completion (finish_reason=%s, has_message=%s, raw_choice=%s)",
                         choice.get("finish_reason"),
-                        sorted(choice.keys()),
+                        "message" in choice,
+                        raw[:500],
                     )
                 return content
         except urllib.error.HTTPError as e:
             logger.error(
                 "HTTP error on attempt %d: %d %s", attempt + 1, e.code, e.reason
             )
-            if attempt == retries:
+            logger.debug("Request data: %s", data)
+            if attempt == cfg.retries:
                 return f"ERROR: {e.code} {e.reason}"
         except Exception as e:
             logger.error("Error on attempt %d: %s", attempt + 1, e)
-            if attempt == retries:
+            logger.debug("Request data: %s", data)
+            if attempt == cfg.retries:
                 return f"ERROR: {e!s}"
 
     return "ERROR: Max retries exceeded"
@@ -190,7 +242,7 @@ def warmup_model(port: int, host: str = "127.0.0.1", messages: int = 3) -> None:
             with urllib.request.urlopen(req, timeout=60) as response:
                 response.read()
         except Exception as e:
-            logger.debug(f"HTTP warmup request failed: {e}")
+            logger.debug("HTTP warmup request failed: %s", e)
 
 
 def reset_context(port: int, system_prompt: str, host: str = "127.0.0.1") -> dict:
@@ -233,41 +285,8 @@ def reset_context(port: int, system_prompt: str, host: str = "127.0.0.1") -> dic
             return {"conversation": messages}
     except Exception as e:
         # If reset fails, return minimal conversation
-        logger.debug(f"context reset failed: {e}")
+        logger.debug("context reset failed: %s", e)
         return {"conversation": [{"role": "system", "content": system_prompt}]}
-
-
-def score_response(judge_port: int, test_name: str, prompt: str, response: str) -> int:
-    """Use LLM as judge to score response 1-10."""
-    judge_prompt = f"""You are an impartial judge.
-    Score the following model response on a scale of 1-10.
-
-TEST: {test_name}
-PROMPT: {prompt[:500]}...
-RESPONSE: {response[:1000]}
-
-Score based on:
-- Correctness and completeness
-- Code quality and runnability
-- Following instructions
-
-Return ONLY a number from 1-10. No explanation."""
-
-    result = run_chat_completion(
-        judge_port,
-        judge_prompt,
-        temperature=0.0,
-        max_tokens=5,
-        seed=42,
-    )
-
-    # Extract number
-    import re
-
-    match = re.search(r"\d+", result)
-    if match:
-        return min(10, max(1, int(match.group())))
-    return 5
 
 
 def test_code(response: str) -> tuple[bool, str]:
@@ -337,6 +356,14 @@ def _extract_code(response: str) -> str:
         for language, body in fenced_blocks:
             if language in preferred_languages:
                 return _normalize_code(body)
+        # If no preferred language, use the first block with Python-like content
+        python_like = [
+            (lang, body)
+            for lang, body in fenced_blocks
+            if "import " in body or "def " in body or "class " in body
+        ]
+        if python_like:
+            return _normalize_code(python_like[0][1])
         return _normalize_code(fenced_blocks[0][1])
 
     lines = response.splitlines()
@@ -395,93 +422,209 @@ def _format_test_status(ran: bool, correct: bool, score: int, response: str) -> 
         return f"PASS {score}/10"
     return f"FAIL {score}/10"
 
-def run_tests(
-    port: int,
-    judge_port: int | None = None,
-    categories: list[str] | None = None,
-    use_llm_judge: bool = True,
-    config=None,
-    system_prompt: str | dict[str, str] | None = None,
-    warmup_rounds: int = 0,
-    context_text: str | None = None,
-    context_files: list[str] | None = None,
-    context_placement: str = "before",
-    temperature: float = 0.0,
-    seed: int = 42,
-    top_p: float = 1.0,
-    top_k: int | None = None,
-    min_p: float | None = None,
-    max_tokens: int = 1024,
-    timeout_seconds: int = 300,
-    conversation: list[dict] | None = None,
-) -> TestSuiteResult:
-    """Run test suite on a running model.
 
-    Args:
-        port: Port for the model API
-        judge_port: Optional port for LLM judge
-        categories: Test categories to run
-        use_llm_judge: Whether to use LLM judge for scoring
-        config: Rama config dict
-        system_prompt: Optional system prompt
-        warmup_rounds: Number of warm-up rounds before tests
-        context_text: Wiki text to inject into context
-        context_files: List of code file contents to inject
-        context_placement: Where to place context ("before", "after", "interleaved", "before_after")
+def summarize_evaluation(results: list[TestResult]) -> dict:
+    """Turn raw test cases into a comparable model-quality verdict.
+
+    A high score is only useful when the model consistently returns an answer
+    that can be executed.  Keep those signals separate so template or server
+    failures are never mistaken for a weak model.
     """
-    if categories is None:
-        categories = ["code", "debugging"]
+    total = len(results)
+    if total == 0:
+        return {
+            "verdict": "no data",
+            "score": None,
+            "tests": 0,
+            "executed": 0,
+            "completion_rate": 0.0,
+            "execution_rate": 0.0,
+            "category_scores": {},
+            "recurring_failures": [],
+        }
 
-    host = config["host"] if config else "127.0.0.1"
+    scored = [result.score for result in results if result.score is not None]
+    score = sum(scored) / len(scored) if scored else None
+    completed = [
+        result
+        for result in results
+        if result.response.strip() and not result.response.startswith("ERROR:")
+    ]
+    executed = [result for result in results if result.ran]
+    completion_rate = len(completed) / total
+    execution_rate = len(executed) / total
 
-    if warmup_rounds > 0:
-        logger.info("Warming up model with %d rounds...", warmup_rounds)
-        warmup_model(port, host=host, messages=warmup_rounds)
+    category_scores = {}
+    for category in sorted({result.category for result in results if result.category}):
+        category_results = [
+            result.score
+            for result in results
+            if result.category == category and result.score is not None
+        ]
+        if category_results:
+            category_scores[category] = round(
+                sum(category_results) / len(category_results), 2
+            )
 
-    categories_dict = discover_tests(config)
+    failure_counts: dict[tuple[str, str], int] = {}
+    for result in results:
+        failed = (
+            not result.response.strip()
+            or result.response.startswith("ERROR:")
+            or not result.ran
+            or not result.correct
+        )
+        if failed:
+            key = (result.category or "uncategorized", result.name)
+            failure_counts[key] = failure_counts.get(key, 0) + 1
+    recurring_failures = [
+        {"category": category, "name": name, "count": count}
+        for (category, name), count in sorted(
+            failure_counts.items(), key=lambda item: (-item[1], item[0])
+        )[:5]
+    ]
+
+    if completion_rate < 0.90 or execution_rate < 0.75:
+        verdict = "broken"
+    elif (
+        score is not None
+        and score >= 8.0
+        and completion_rate >= 0.98
+        and execution_rate >= 0.98
+    ):
+        verdict = "excellent"
+    elif score is not None and score >= 7.0:
+        verdict = "good"
+    elif score is not None and score >= 5.5:
+        verdict = "usable with review"
+    else:
+        verdict = "not recommended"
+
+    return {
+        "verdict": verdict,
+        "score": round(score, 2) if score is not None else None,
+        "tests": total,
+        "executed": len(executed),
+        "completion_rate": round(completion_rate, 4),
+        "execution_rate": round(execution_rate, 4),
+        "category_scores": category_scores,
+        "recurring_failures": recurring_failures,
+    }
+
+
+@dataclass
+class TestRunConfig:
+    """Configuration for running a test suite."""
+
+    port: int
+    judge_port: int | None = None
+    categories: list[str] | None = None
+    use_llm_judge: bool = True
+    config: dict | None = None
+    system_prompt: str | dict[str, str] | None = None
+    warmup_rounds: int = 0
+    context_text: str | None = None
+    context_files: list[str] | None = None
+    context_placement: str = "before"
+    temperature: float = 0.0
+    seed: int = 42
+    top_p: float = 1.0
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    repeat_penalty: float | None = None
+    max_tokens: int = 2048
+    timeout_seconds: int = 300
+    conversation: list[dict] | None = None
+    reasoning: bool | None = None
+    reasoning_template_key: str = "enable_thinking"
+    reasoning_template_value: bool | str | None = None
+    max_tests_per_category: int | None = None
+
+    # Profile-derived fields (from ResolvedModelProfile)
+    sampler: SamplerSettings | None = None
+    capabilities: FamilyCapabilities | None = None
+
+    def __post_init__(self):
+        if self.sampler is not None:
+            self.temperature = self.sampler.temperature
+            self.top_p = self.sampler.top_p
+            self.top_k = self.sampler.top_k
+            self.min_p = self.sampler.min_p
+            self.presence_penalty = self.sampler.presence_penalty
+            self.repeat_penalty = self.sampler.repeat_penalty
+
+        if (
+            self.capabilities is not None
+            and self.reasoning_template_key == "enable_thinking"
+            and self.capabilities.reasoning_template_key
+        ):
+            self.reasoning_template_key = self.capabilities.reasoning_template_key
+
+
+def run_tests(cfg: TestRunConfig) -> TestSuiteResult:
+    """Run test suite on a running model."""
+    categories = cfg.categories or ["code", "debugging"]
+    host = (cfg.config or {})["host"] if cfg.config else "127.0.0.1"
+
+    if cfg.warmup_rounds > 0:
+        logger.info("Warming up model with %d rounds...", cfg.warmup_rounds)
+        warmup_model(cfg.port, host=host, messages=cfg.warmup_rounds)
+
+    categories_dict = discover_tests(cfg.config)
     results = []
 
-    # Build context if provided
     context_parts = []
-    if context_text:
-        context_parts.append(context_text)
-    if context_files:
-        context_parts.extend(context_files)
+    if cfg.context_text:
+        context_parts.append(cfg.context_text)
+    if cfg.context_files:
+        context_parts.extend(cfg.context_files)
     full_context = "\n\n".join(context_parts) if context_parts else None
 
     for category in categories:
         if category not in categories_dict:
             continue
 
-        for test_file in categories_dict[category]:
+        test_files = categories_dict[category]
+        if cfg.max_tests_per_category is not None:
+            test_files = test_files[: cfg.max_tests_per_category]
+
+        for test_file in test_files:
             task = load_task(test_file)
             test_name = test_file.stem
             prompt = task["prompt"]
 
-            # Build final prompt with context injection
             final_prompt = _build_prompt_with_context(
-                prompt, full_context, context_placement
+                prompt, full_context, cfg.context_placement
             )
             category_system_prompt = (
-                system_prompt.get(category)
-                if isinstance(system_prompt, dict)
-                else system_prompt
+                cfg.system_prompt.get(category)
+                if isinstance(cfg.system_prompt, dict)
+                else cfg.system_prompt
             )
 
-            # Run test
             response = run_chat_completion(
-                port,
-                final_prompt,
-                host=host,
-                system_prompt=category_system_prompt,
-                temperature=temperature,
-                seed=seed,
-                conversation=conversation,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                timeout_seconds=timeout_seconds,
+                ChatCompletionConfig(
+                    port=cfg.port,
+                    prompt=final_prompt,
+                    host=host,
+                    system_prompt=category_system_prompt,
+                    temperature=cfg.temperature,
+                    seed=cfg.seed,
+                    conversation=cfg.conversation,
+                    max_tokens=cfg.max_tokens,
+                    top_p=cfg.top_p,
+                    top_k=cfg.top_k,
+                    min_p=cfg.min_p,
+                    presence_penalty=cfg.presence_penalty,
+                    repeat_penalty=cfg.repeat_penalty,
+                    timeout_seconds=cfg.timeout_seconds,
+                    reasoning=cfg.reasoning,
+                    reasoning_template_key=cfg.reasoning_template_key,
+                    reasoning_template_value=cfg.reasoning_template_value,
+                    sampler=cfg.sampler,
+                    capabilities=cfg.capabilities,
+                )
             )
 
             ran, correct, score, output = _evaluate_single_response(
@@ -557,6 +700,7 @@ def save_results_json(result: TestSuiteResult, path: Path) -> None:
         "model_name": result.model_name,
         "backend": result.backend,
         "overall_score": result.overall_score,
+        "evaluation": summarize_evaluation(result.results),
         "tests": [
             {
                 "name": r.name,
@@ -574,10 +718,10 @@ def save_results_json(result: TestSuiteResult, path: Path) -> None:
 
 
 def save_results_csv(results: list[dict], path: Path) -> None:
-    """Save batch results to CSV with one aggregate column per task type."""
+    """Save one sortable summary row per model for a batch result."""
 
     def aggregate_category_score(tests: list[dict], category: str) -> str:
-        category_tests = [t for t in tests if t.get("category") == category]
+        category_tests = [test for test in tests if test.get("category") == category]
         if not category_tests:
             return ""
 
@@ -585,14 +729,42 @@ def save_results_csv(results: list[dict], path: Path) -> None:
         max_score = 10 * len(category_tests)
         return f"{total_score / max_score:.4f}"
 
+    def aggregate_run_scores(runs: list[dict], run_type: str) -> tuple[str, str]:
+        scores = [
+            float(run["score"])
+            for run in runs
+            if run.get("run_type") == run_type and run.get("score") is not None
+        ]
+        if not scores:
+            return "", ""
+        mean = sum(scores) / len(scores)
+        stddev = statistics.stdev(scores) if len(scores) > 1 else 0.0
+        return f"{mean:.4f}", f"{stddev:.4f}"
+
+    def aggregate_score(result: dict, tests: list[dict]) -> str:
+        if result.get("score") is not None:
+            return f"{float(result['score']):.4f}"
+        scores = [
+            float(test["score"]) for test in tests if test.get("score") is not None
+        ]
+        return f"{sum(scores) / len(scores):.4f}" if scores else ""
+
     header = [
         "model",
         "backend",
         "ctk",
         "ctv",
         "ctx",
-        "seed",
-        "run_type",
+        "reasoning",
+        "score",
+        "score_stddev",
+        "verdict",
+        "completion_rate",
+        "execution_rate",
+        "runs",
+        "sampled_runs",
+        "family_score",
+        "family_score_stddev",
         "test_time_seconds",
         "code",
         "debug",
@@ -600,68 +772,59 @@ def save_results_csv(results: list[dict], path: Path) -> None:
     rows = []
     for r in results:
         tests = r.get("tests", [])
+        runs = r.get("runs", [])
+        evaluation = r.get("evaluation", {})
+        family_score, family_stddev = aggregate_run_scores(runs, "family")
         row = [
             r.get("model", ""),
             r.get("backend", ""),
             r.get("ctk", ""),
             r.get("ctv", ""),
             r.get("ctx", ""),
-            r.get("seed", ""),
-            r.get("run_type", ""),
+            r.get("reasoning", ""),
+            aggregate_score(r, tests),
+            r.get("score_stddev", ""),
+            evaluation.get("verdict", ""),
+            evaluation.get("completion_rate", ""),
+            evaluation.get("execution_rate", ""),
+            len(runs),
+            r.get("sampled_runs", ""),
+            family_score,
+            family_stddev,
             r.get("test_time_seconds", ""),
             aggregate_category_score(tests, "code"),
             aggregate_category_score(tests, "debugging"),
         ]
         rows.append(row)
 
-    with path.open("w", newline="") as f:
+    temp_file = path.with_suffix(f"{path.suffix}.tmp")
+    with temp_file.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(rows)
-
-
-def reevaluate_batch_results_file(path: Path) -> list[dict]:
-    """Recompute ran/correct/score fields in an existing batch results JSON file."""
-    data = json.loads(path.read_text())
-    for run in data:
-        for test in run.get("tests", []):
-            ran, correct, score, _ = _evaluate_single_response(
-                test.get("name", ""),
-                test.get("category", ""),
-                test.get("response", ""),
-            )
-            test["ran"] = ran
-            test["correct"] = correct
-            test["score"] = score
-
-        tests = run.get("tests", [])
-        if tests:
-            run["score"] = sum(float(t.get("score", 0) or 0) for t in tests) / len(
-                tests,
-            )
-        else:
-            run["score"] = 0.0
-    path.write_text(json.dumps(data, indent=2))
-    return data
-
-
-def load_batch_results(json_path: Path) -> list[dict]:
-    """Load batch results from JSON."""
-    return json.loads(json_path.read_text())
-
-
-def export_batch_csv(json_path: Path, csv_path: Path) -> None:
-    """Export batch JSON results to CSV."""
-    results = load_batch_results(json_path)
-    save_results_csv(results, csv_path)
+    temp_file.replace(path)
 
 
 def format_markdown(result: TestSuiteResult) -> str:
     """Format results as markdown table."""
+    evaluation = summarize_evaluation(result.results)
+    score = (
+        f"{result.overall_score:.1f}/10" if result.overall_score is not None else "N/A"
+    )
+    category_scores = ", ".join(
+        f"{category}={score:.1f}"
+        for category, score in evaluation["category_scores"].items()
+    )
     lines = [
         f"# Test Results: {result.model_name}",
         f"Backend: {result.backend}",
-        f"Overall Score: {result.overall_score:.1f}/10",
+        f"Overall Score: {score}",
+        f"Verdict: {evaluation['verdict']}",
+        (
+            f"Reliability: completion {evaluation['completion_rate']:.0%}, "
+            f"execution {evaluation['execution_rate']:.0%}"
+        ),
+        f"Category scores: {category_scores or 'N/A'}",
         "",
         "| Test | Category | Score |",
         "|------|----------|-------|",

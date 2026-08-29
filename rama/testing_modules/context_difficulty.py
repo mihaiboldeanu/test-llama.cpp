@@ -9,12 +9,12 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass, field
-
-from rama.core import find_free_port
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+
+from rama.core import find_free_port
 
 from .base import TestModule, TestResult
 
@@ -112,9 +112,11 @@ class ContextDifficultyModule(TestModule):
                     "placement": self.difficulty_config.placement,
                 }
 
-                avg_score = sum(r.get("score", 0) for r in test_results) / len(
-                    test_results
-                ) if test_results else 0
+                avg_score = (
+                    sum(r.get("score", 0) for r in test_results) / len(test_results)
+                    if test_results
+                    else 0
+                )
                 self._log(f"  Average score: {avg_score:.1f}/10")
 
             except Exception as e:
@@ -125,7 +127,9 @@ class ContextDifficultyModule(TestModule):
                     self._stop_model(actual_port)
                     self._log(f"Stopped model on port {actual_port}")
                 except Exception as e:
-                    self._log(f"Failed to stop model on port {actual_port}: {e}", style="red")
+                    self._log(
+                        f"Failed to stop model on port {actual_port}: {e}", style="red"
+                    )
 
         duration = time.perf_counter() - start_time
 
@@ -137,7 +141,10 @@ class ContextDifficultyModule(TestModule):
                 "config": {
                     "placement": self.difficulty_config.placement,
                     "difficulty_levels": {
-                        k: {"wiki_tokens": v["wiki_tokens"], "code_files": v["code_files"]}
+                        k: {
+                            "wiki_tokens": v["wiki_tokens"],
+                            "code_files": v["code_files"],
+                        }
                         for k, v in self.difficulty_config.difficulty_levels.items()
                     },
                 },
@@ -176,9 +183,7 @@ class ContextDifficultyModule(TestModule):
 
         return full_text
 
-    def _load_code_files(
-        self, file_patterns: list[str] | None = None
-    ) -> list[str]:
+    def _load_code_files(self, file_patterns: list[str] | None = None) -> list[str]:
         """Load code files matching the given patterns."""
         if not file_patterns:
             return []
@@ -195,14 +200,15 @@ class ContextDifficultyModule(TestModule):
                         count = int(part.split(":")[1].strip())
                         break
 
-                files = sorted(Path(glob_pattern).parent.glob(glob_pattern.split("/")[-1]))
+                files = sorted(
+                    Path(glob_pattern).parent.glob(glob_pattern.split("/")[-1])
+                )
                 files = [f for f in files if f.suffix == ".txt"]
 
-                if count is not None:
+                if count is not None and len(files) > count:
                     # Randomly select N files
-                    if len(files) > count:
-                        random.shuffle(files)
-                        files = files[:count]
+                    random.shuffle(files)
+                    files = files[:count]
 
                 for f in files:
                     contents.append(f.read_text())
@@ -219,32 +225,35 @@ class ContextDifficultyModule(TestModule):
         difficulty: str = "easy",
     ) -> list[dict[str, Any]]:
         """Run code/debug tests with injected context based on difficulty level."""
-        from rama.testing import run_tests
+        from rama.testing import TestRunConfig, run_tests
 
         difficulty_config = self.difficulty_config.difficulty_levels.get(difficulty, {})
         placement = difficulty_config.get("placement", self.difficulty_config.placement)
 
         try:
             test_result = run_tests(
-                port,
-                categories=["code", "debugging"],
-                config=self.config,
-                context_text=wiki_text,
-                context_files=code_contents,
-                context_placement=placement,
+                TestRunConfig(
+                    port=port,
+                    categories=["code", "debugging"],
+                    config=self.config,
+                    context_text=wiki_text,
+                    context_files=code_contents,
+                    context_placement=placement,
+                )
             )
 
             results = []
             for r in test_result.results:
-                results.append({
-                    "name": r.name,
-                    "category": r.category,
-                    "score": r.score,
-                    "correct": r.correct,
-                })
+                results.append(
+                    {
+                        "name": r.name,
+                        "category": r.category,
+                        "score": r.score,
+                        "correct": r.correct,
+                    }
+                )
 
             return results
         except Exception as e:
             self._log(f"  Test execution error: {e}", "yellow")
             return []
-

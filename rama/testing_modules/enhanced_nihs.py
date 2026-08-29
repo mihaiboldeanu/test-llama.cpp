@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import random
 import time
-import uuid
 from dataclasses import dataclass, field
-
-from rama.core import find_free_port
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+
+from rama.core import find_free_port
 
 from .base import TestModule, TestResult
 
@@ -115,7 +114,9 @@ class EnhancedNIHSModule(TestModule):
             # Run tests for each needle
             results = []
             for i, needle in enumerate(needles):
-                self._log(f"  Testing needle {i+1}/{len(needles)} at {needle.location}")
+                self._log(
+                    f"  Testing needle {i + 1}/{len(needles)} at {needle.location}"
+                )
 
                 # Select distractors for this needle
                 needle_distractors = random.sample(
@@ -184,7 +185,7 @@ class EnhancedNIHSModule(TestModule):
         self,
     ) -> tuple[list[Needle], list[Distractor]]:
         """Generate needles and distractors for testing.
-        
+
         Creates realistic scenarios like:
         - needle: "product_api_key is BLUE-123"
         - distractor: "deprecated_api_key is RED-123" (lexical, similar format)
@@ -239,24 +240,34 @@ class EnhancedNIHSModule(TestModule):
             ],
         }
 
-        color_codes = ["BLUE", "RED", "GREEN", "GOLD", "SILVER", "BRONZE", "IVORY", "EBONY"]
+        color_codes = [
+            "BLUE",
+            "RED",
+            "GREEN",
+            "GOLD",
+            "SILVER",
+            "BRONZE",
+            "IVORY",
+            "EBONY",
+        ]
         hex_suffixes = [rng.getrandbits(16) for _ in range(20)]
 
         # Generate needles with labels
         for i in range(self.nihs_config.num_needles):
             template_idx = i % len(needle_templates)
-            label, format_str = needle_templates[template_idx]
+            label, _ = needle_templates[template_idx]
             color = color_codes[i % len(color_codes)]
             hex_val = f"{hex_suffixes[i]:04X}"
             token = f"{color}-{hex_val}"
-            full_needle = f"{label} {format_str.format(token)}"
             location = rng.choice(self.nihs_config.needle_locations)
             needles.append(Needle(token=token, location=location, label=label))
 
         # Generate distractors for each needle
         for needle in needles:
             for dtype in self.nihs_config.distractor_types:
-                num_distractors = rng.randint(1, self.nihs_config.distractors_per_needle)
+                num_distractors = rng.randint(
+                    1, self.nihs_config.distractors_per_needle
+                )
                 templates = distractor_templates[dtype]
 
                 for _ in range(num_distractors):
@@ -266,17 +277,21 @@ class EnhancedNIHSModule(TestModule):
                         # Use different color/value to make it clearly different but similar format
                         color = color_codes[rng.randint(0, len(color_codes) - 1)]
                         hex_val = f"{rng.getrandbits(16):04X}"
-                        text = f"{dist_label} {dist_format.format(f'{color}-{hex_val}')}"
+                        text = (
+                            f"{dist_label} {dist_format.format(f'{color}-{hex_val}')}"
+                        )
                     elif dtype == "topical":
                         text = templates[rng.randint(0, len(templates) - 1)]
                     else:
                         text = templates[rng.randint(0, len(templates) - 1)]
 
-                    distractors.append(Distractor(
-                        type=dtype,
-                        text=text,
-                        relates_to=needle.label,
-                    ))
+                    distractors.append(
+                        Distractor(
+                            type=dtype,
+                            text=text,
+                            relates_to=needle.label,
+                        )
+                    )
 
         return needles, distractors
 
@@ -310,9 +325,7 @@ class EnhancedNIHSModule(TestModule):
 
         return context_with_needle
 
-    def _insert_at_location(
-        self, text: str, needle: Needle, location: str
-    ) -> str:
+    def _insert_at_location(self, text: str, needle: Needle, location: str) -> str:
         """Insert needle at specified location in text."""
         needle_line = f"\n\n{needle.label} is {needle.token}\n\n"
 
@@ -363,7 +376,7 @@ class EnhancedNIHSModule(TestModule):
 
     def _build_prompt(self, context: str, needle: Needle) -> str:
         """Build the full test prompt for a specific needle.
-        
+
         Asks about the specific label (e.g., "product_api_key") to test
         if the model can find the right value among distractors.
         """

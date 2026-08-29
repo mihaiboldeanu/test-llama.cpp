@@ -120,18 +120,14 @@ def run_needle_test(
     max_tokens: int | None = None,
 ) -> ContextTestResult:
     """Run a single needle-in-haystack test."""
-    from .testing import run_chat_completion
+    from .testing import ChatCompletionConfig, run_chat_completion
 
     content = text_file.read_text()
 
-    # Truncate content to fit within max_tokens (leaving room for prompt overhead)
     if max_tokens:
-        # Reserve ~100 tokens for the prompt/question wrapper
         max_content_tokens = max_tokens - 100
-        # Rough estimate: 1 token ≈ 4 chars
         max_content_chars = max_content_tokens * 4
         content = content[:max_content_chars]
-        # Truncate at last sentence boundary
         last_period = content.rfind(".")
         if last_period > max_content_chars // 2:
             content = content[: last_period + 1]
@@ -141,12 +137,14 @@ def run_needle_test(
     prompt = build_prompt(haystack, needle)
 
     response = run_chat_completion(
-        port,
-        prompt,
-        temperature=0.0,
-        max_tokens=256,
-        seed=seed if seed is not None else 42,
-        host=host,
+        ChatCompletionConfig(
+            port=port,
+            prompt=prompt,
+            temperature=0.0,
+            max_tokens=256,
+            seed=seed if seed is not None else 42,
+            host=host,
+        )
     )
 
     has_repetition = check_for_repetition(response)

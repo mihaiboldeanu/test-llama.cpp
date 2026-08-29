@@ -1,4 +1,6 @@
+import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,6 @@ DEFAULT_CONFIG = {
     "vram_total_gb": 24,
     "vram_headroom_gb": 2,
     "fit_target_mib": 1024,
- 
     "batch_size": 4096,
     "ubatch_size": 2048,
     "temp": 0.6,
@@ -49,8 +50,74 @@ DEFAULT_CONFIG = {
     "default_port": 11435,
     "port_range_end": 11500,
     "families": {},
+    "models": {},
 }
 
+class ConfigError(ValueError):
+    """Raised when a Rama configuration cannot be used safely."""
+
+def validate_config(cfg: dict[str, Any]) -> list[str]:
+    """Return human-readable validation errors for a resolved configuration."""
+    errors = []
+
+    def is_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    for key in ("build_jobs", "threads", "threads_batch", "batch_size", "ubatch_size"):
+        if key in cfg and (not is_int(cfg[key]) or cfg[key] <= 0):
+            errors.append(f"{key} must be a positive integer")
+
+    for key in ("vram_total_gb", "vram_headroom_gb"):
+        if key in cfg and (
+            not isinstance(cfg[key], (int, float))
+            or isinstance(cfg[key], bool)
+            or cfg[key] < 0
+        ):
+            errors.append(f"{key} must be a non-negative number")
+
+    for key in ("temp", "top_p", "min_p"):
+        if key in cfg and (
+            not isinstance(cfg[key], (int, float))
+            or isinstance(cfg[key], bool)
+            or not 0 <= cfg[key] <= (2 if key == "temp" else 1)
+        ):
+            maximum = 2 if key == "temp" else 1
+            errors.append(f"{key} must be a number between 0 and {maximum}")
+
+    if "top_k" in cfg and (not is_int(cfg["top_k"]) or cfg["top_k"] < -1):
+        errors.append("top_k must be an integer greater than or equal to -1")
+
+    for key in ("default_port", "port_range_end"):
+        if key in cfg and (not is_int(cfg[key]) or not 1024 <= cfg[key] <= 65535):
+            errors.append(f"{key} must be a TCP port between 1024 and 65535")
+    if cfg.get("default_port", 0) > cfg.get("port_range_end", 0):
+        errors.append("default_port must not be greater than port_range_end")
+
+    families = cfg.get("families", {})
+    if not isinstance(families, dict):
+        errors.append("families must be a mapping of family names to settings")
+    elif any(not isinstance(settings, dict) for settings in families.values()):
+        errors.append("every family setting must be a mapping")
+
+    models = cfg.get("models", {})
+    if not isinstance(models, dict):
+        errors.append("models must be a mapping of model names to settings")
+    elif any(not isinstance(settings, dict) for settings in models.values()):
+        errors.append("every model setting must be a mapping")
+
+    template_kwargs = cfg.get("chat_template_kwargs")
+    if template_kwargs is not None:
+        if not isinstance(template_kwargs, str):
+            errors.append("chat_template_kwargs must be a JSON object string")
+        else:
+            try:
+                parsed = json.loads(template_kwargs)
+                if not isinstance(parsed, dict):
+                    errors.append("chat_template_kwargs must decode to a JSON object")
+            except json.JSONDecodeError:
+                errors.append("chat_template_kwargs must contain valid JSON")
+
+    return errors
 
 def _detect_vram_gb() -> float | None:
     """Auto-detect VRAM via nvidia-smi."""
@@ -74,7 +141,6 @@ def _detect_vram_gb() -> float | None:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
     return None
-
 
 def _detect_cuda_arch() -> str | None:
     """Auto-detect CUDA architecture from GPU name."""
@@ -113,7 +179,6 @@ def _detect_cuda_arch() -> str | None:
         pass
     return None
 
-
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     """Load config from file or use defaults."""
     cfg = DEFAULT_CONFIG.copy()
@@ -131,6 +196,31 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
     if path and path.exists():
         with open(path) as f:
             user_cfg = yaml.safe_load(f) or {}
+        if not isinstance(user_cfg, dict):
+            raise ConfigError(f"Configuration file must contain a mapping: {path}")
+
+        # Handle repetition_penalty translation with deprecation warning
+        _repetition_warned = False
+
+        def translate_repetition(d: dict):
+            nonlocal _repetition_warned
+            if "repetition_penalty" in d:
+                d["repeat_penalty"] = d.pop("repetition_penalty")
+                if not _repetition_warned:
+                    warnings.warn(
+                        "Config key 'repetition_penalty' is deprecated; "
+                        "use 'repeat_penalty' instead.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    _repetition_warned = True
+            for section in ("families", "models"):
+                if section in d and isinstance(d[section], dict):
+                    for name, settings in d[section].items():
+                        if isinstance(settings, dict):
+                            translate_repetition(settings)
+
+        translate_repetition(user_cfg)
         cfg.update(user_cfg)
 
     # Auto-detect VRAM if not set by user
@@ -150,8 +240,11 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         if key in cfg:
             cfg[key] = os.path.expanduser(str(cfg[key]))
 
-    return cfg
+    errors = validate_config(cfg)
+    if errors:
+        raise ConfigError("Invalid Rama configuration:\n- " + "\n- ".join(errors))
 
+    return cfg
 
 class Config:
     """Config object with nice accessors."""

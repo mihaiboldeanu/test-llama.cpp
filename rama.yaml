@@ -1,7 +1,7 @@
-model_dir: ~/ollama
+model_dir: /mnt/FasterData/models
 llama_cpp_dir: ~/Projects/llama.cpp
 turbo_dir: ~/Projects/llama-cpp-turboquant
-cuda_root: /opt/cuda-13.1
+cuda_root: /opt/cuda
 
 build_jobs: 8
 threads: 8
@@ -32,16 +32,94 @@ families:
   qwen:
     small_ctx: 24576
     large_ctx: 151552
-    temp: 0.6
+    temp: 0.7
+    top_k: 20
+    top_p: 0.8
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 1.5
+
+  qwen3.8:
+    # Qwen3.8 thinks by default.  These are its official thinking-mode
+    # sampling parameters; keep its context policy aligned with Qwen.
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 151552
+    # q8 KV leaves enough VRAM headroom near the full configured context;
+    # keep a small 5% trim so the MTP draft KV cache has breathing room.
+    mtp_ctx_ratio: 0.95
+    temp: 1.0
     top_k: 20
     top_p: 0.95
     min_p: 0.0
-    repetition_penalty: 1.0
+    repeat_penalty: 1.0
+    presence_penalty: 0.0
+
+  qwen-coder:
+    default_reasoning: false
+    small_ctx: 24576
+    large_ctx: 151552
+    temp: 0.7
+    top_k: 20
+    top_p: 0.8
+    min_p: 0.0
+    repeat_penalty: 1.05
+
+  grug:
+    # Grug-27B is a Qwen3.6-27B derivative with compact native reasoning.
+    # Keep Qwen's reasoning-template path and its code-oriented sampler.
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 151552
+    temp: 0.7
+    top_k: 20
+    top_p: 0.8
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  gpt-oss:
+    reasoning_template_key: reasoning_effort
+    reasoning_enabled_value: high
+    reasoning_disabled_value: low
+    # llama.cpp's native PEG parser rejects some valid gpt-oss channel labels
+    # (for example, "final code"). Return raw content and let Rama extract it.
+    skip_chat_parsing: true
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 131072
+    temp: 1.0
+    top_k: 0
+    top_p: 1.0
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  lfm:
+    # LFM2-24B-A2B is an instruct-only hybrid MoE (no reasoning traces).
+    default_reasoning: false
+    small_ctx: 24576
+    large_ctx: 32768
+    temp: 0.1
+    top_k: 50
+    top_p: 1.0
+    min_p: 0.0
+    repeat_penalty: 1.05
+
+  ling:
+    # Ling-mini-2.0's native context is 32K; 128K needs a YaRN conversion.
+    default_reasoning: false
+    small_ctx: 24576
+    large_ctx: 32768
+    temp: 0.7
+    top_k: 0
+    top_p: 0.8
+    min_p: 0.0
+    repeat_penalty: 1.05
 
   gemma:
-    chat_template_file: gemma4.jinja
+    # Gemma GGUFs now embed the corrected native template; do not override it.
+    # chat_template_file: gemma4.jinja
     small_ctx: 24576
-    large_ctx: 65536
+    large_ctx: 131072
     temp: 1.0
     top_k: 64
     top_p: 0.95
@@ -49,17 +127,30 @@ families:
 
   bonsai:
     small_ctx: 24576
-    large_ctx: 65536
+    large_ctx: 32768
     temp: 0.7
-    top_k: 40
+    top_k: 20
     top_p: 0.95
-    min_p: 0.05
+    min_p: 0.0
+
+  bonsai-27:
+    # 1-bit and ternary Bonsai 27B are Qwen3.5 hybrid-attention models.
+    default_reasoning: true
+    # These GGUFs are compact despite being 27B, so do not classify them by
+    # file size as a small-context model.
+    small_ctx: 262144
+    large_ctx: 262144
+    temp: 0.7
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
 
   devstral:
     chat_template_file: devstral-fix.jinja
     small_ctx: 24576
     large_ctx: 81920
-    temp: 0.5
+    temp: 0.15
     top_k: 40
     top_p: 0.9
     min_p: 0.05
@@ -74,18 +165,31 @@ families:
     min_p: 0.05
 
   glm:
-    small_ctx: 24576
-    large_ctx: 102400
-    temp: 1.0
-    top_k: 64
+    default_reasoning: true
+    small_ctx: 32768
+    large_ctx: 202752
+    temp: 0.7
+    top_k: 0
+    top_p: 1.0
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  nex-n2:
+    # Nex-N2-mini is post-trained on Qwen3.5-35B-A3B-Base, with its own
+    # agentic-thinking template and official sampling profile.
+    default_reasoning: true
+    small_ctx: 32768
+    large_ctx: 262144
+    temp: 0.7
+    top_k: 40
     top_p: 0.95
-    min_p: 0.01
-    repetition_penalty: 1.0
+    min_p: 0.0
+    repeat_penalty: 1.0
 
   nemotron:
     small_ctx: 24576
     large_ctx: 65536
-    temp: 0.6
+    temp: 1.0
     top_k: 40
     top_p: 0.95
     min_p: 0.05
@@ -105,3 +209,85 @@ families:
     top_k: 64
     top_p: 0.95
     min_p: 0.05
+
+  ornith:
+    small_ctx: 24576
+    large_ctx: 151552
+    temp: 0.7
+    top_k: 20
+    top_p: 0.8
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 1.5
+
+  laguna:
+    # Laguna S 2.1 supports 1M tokens, but 128K is the proven local setting
+    # for IQ4_XS with q8/q8 KV cache. Preserve native thinking by default.
+    default_reasoning: true
+    small_ctx: 32768
+    large_ctx: 131072
+    temp: 1.0
+    top_k: 20
+    top_p: 1.0
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  north-code:
+    reasoning_template_key: reasoning
+    small_ctx: 24576
+    large_ctx: 151552
+    temp: 1.0
+    top_k: 0
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  mellum:
+    small_ctx: 24576
+    large_ctx: 131072
+    temp: 0.6
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+
+  muse-glimmer:
+    small_ctx: 16384
+    large_ctx: 131072
+    temp: 1.0
+    top_k: 64
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+    default_reasoning: true
+    reasoning_template_key: reasoning_strength
+    reasoning_enabled_value: high
+    reasoning_disabled_value: low
+    # KV cache uses f16 for best quality. The context auto-calculator accounts
+    # for its higher VRAM use before launching.
+    ctk: f16
+    ctv: f16
+
+models:
+  Muse-Glimmer-30B-UD-Q4_K_XL:
+    # llama.cpp resolves this by name to dflash-kquant-muse.gguf. DFlash is a
+    # target-specific block-diffusion draft, so retain this pairing.
+    draft_model: dflash
+    spec_type: draft-dflash
+    draft_max: 15
+    draft_min: 0
+
+  Laguna-S-2.1-UD-IQ4_XS:
+    # Keep the first 33 of Laguna's 48 expert layers on CPU and offload the
+    # final 15 plus all dense layers to VRAM. This targets ~22 GB VRAM without
+    # crowding f16 KV/cache and CUDA work buffers. mmap is essential here:
+    # this 54 GiB GGUF cannot be fully resident alongside a normal desktop.
+    n_cpu_moe: 34
+    n_gpu_layers: 99
+    fit: false
+    fit_ctx: false
+    no_mmap: false
+    # Conservative prefill buffers prevent a large temporary RAM/VRAM spike.
+    batch_size: 256
+    ubatch_size: 128
+    preferred_ctx: 131072
