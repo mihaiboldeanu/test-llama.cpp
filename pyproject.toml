@@ -25,7 +25,7 @@ select = [
     "ARG", "PTH", "PL", "N999", "S",
 ]
 ignore = [
-    "E501", "ANN401", "PLR0913", "S101",
+    "E501", "ANN401", "PLR0913", "PLR0917", "S101",
     "FBT001", "FBT002", "N999", "ERA001", "PLR2004", "RUF001",
     "COM812",
     # Intentional patterns in test/launch code
