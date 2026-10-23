@@ -7,8 +7,10 @@ no config resolution or argv construction logic.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import signal
 import subprocess
 import time
@@ -28,6 +30,7 @@ class RunnerInput:
     port: int
     host: str
     pid_dir: Path | None = None  # None -> use default ~/.local/state/rama/pids
+    env: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -37,11 +40,13 @@ class RunnerResult:
     pid: int
 
 
-def _get_default_pid_dir() -> Path:
-    return Path.home() / ".local" / "state" / "rama" / "pids"
+def default_pid_dir() -> Path:
+    path = Path.home() / ".local" / "state" / "rama" / "pids"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def _pid_exists(pid: int) -> bool:
+def pid_exists(pid: int) -> bool:
     """Check if a process exists."""
     try:
         import os
@@ -52,7 +57,7 @@ def _pid_exists(pid: int) -> bool:
         return False
 
 
-def _terminate(pid: int, grace_seconds: float = 8.0) -> bool:
+def terminate_process(pid: int, grace_seconds: float = 8.0) -> bool:
     """Best-effort terminate a process, escalating to SIGKILL if needed."""
     import os
 
@@ -67,40 +72,34 @@ def _terminate(pid: int, grace_seconds: float = 8.0) -> bool:
 
     deadline = time.time() + grace_seconds
     while time.time() < deadline:
-        if not _pid_exists(pid):
+        if not pid_exists(pid):
             return True
         time.sleep(0.2)
 
     # Process didn't die — try the whole group (start_new_session=True means we own it).
-    try:
+    with contextlib.suppress(OSError):
         os.killpg(pid, signal.SIGTERM)
-    except OSError:
-        pass
 
     deadline = time.time() + 2.0
     while time.time() < deadline:
-        if not _pid_exists(pid):
+        if not pid_exists(pid):
             return True
         time.sleep(0.2)
 
     # Force kill — process first, then group.
-    try:
+    with contextlib.suppress(OSError):
         os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
 
-    try:
+    with contextlib.suppress(OSError):
         os.killpg(pid, signal.SIGKILL)
-    except OSError:
-        pass
 
     deadline = time.time() + 2.0
     while time.time() < deadline:
-        if not _pid_exists(pid):
+        if not pid_exists(pid):
             return True
         time.sleep(0.1)
 
-    return not _pid_exists(pid)
+    return not pid_exists(pid)
 
 
 def _cleanup_pid_files(pid_dir: Path, port: int, model_name: str) -> None:
@@ -129,13 +128,18 @@ def run(
     Raises:
         RuntimeError: if process crashes or health check times out.
     """
-    pid_dir = inp.pid_dir or _get_default_pid_dir()
+    pid_dir = inp.pid_dir or default_pid_dir()
     pid_dir.mkdir(parents=True, exist_ok=True)
 
     # Launch subprocess
+    run_env = os.environ.copy()
+    if inp.env:
+        run_env.update({str(key): str(value) for key, value in inp.env.items()})
+
     proc = subprocess.Popen(
         inp.args,
         start_new_session=True,
+        env=run_env,
         stdout=subprocess.DEVNULL if log_disable else None,
         stderr=subprocess.DEVNULL if log_disable else None,
     )
@@ -171,7 +175,7 @@ def run(
         # Check if process crashed
         exit_code = proc.poll()
         if exit_code is not None:
-            _terminate(proc.pid)
+            terminate_process(proc.pid)
             _cleanup_pid_files(pid_dir, inp.port, inp.model_name)
             cmd_str = " ".join(inp.args)
             raise RuntimeError(
@@ -187,6 +191,6 @@ def run(
             continue
 
     # Timeout — clean up and raise
-    _terminate(proc.pid)
+    terminate_process(proc.pid)
     _cleanup_pid_files(pid_dir, inp.port, inp.model_name)
     raise RuntimeError(f"Model failed to start within {max_wait} seconds")

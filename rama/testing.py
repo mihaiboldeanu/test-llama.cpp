@@ -4,12 +4,33 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
-from .domain.models import FamilyCapabilities, SamplerSettings
 from .log import setup_logging
 from .testing_modules.base import TestResult, TestSuiteResult
 from .testing_modules.code_runner import load_task, run_task
 
 logger = setup_logging()
+
+
+_SAMPLER_ARG_FIELDS = {
+    "--temp": ("temperature", float),
+    "--top-p": ("top_p", float),
+    "--top-k": ("top_k", int),
+    "--min-p": ("min_p", float),
+    "--presence-penalty": ("presence_penalty", float),
+    "--repeat-penalty": ("repeat_penalty", float),
+}
+
+
+def sampler_fields_from_args(args: dict | None) -> dict:
+    """Translate merged llama-server sampler flags to chat-request fields."""
+    fields: dict = {}
+    for flag, (field, convert) in _SAMPLER_ARG_FIELDS.items():
+        if args is not None and args.get(flag) is not None:
+            try:
+                fields[field] = convert(args[flag])
+            except (TypeError, ValueError):
+                continue
+    return fields
 
 
 def get_tests_dir(config=None) -> Path:
@@ -38,9 +59,9 @@ def discover_tests(config=None) -> dict[str, list[Path]]:
 class ChatCompletionConfig:
     """Configuration for a chat completion request.
 
-    Sampler and reasoning fields can be derived from a ResolvedModelProfile via the
-    optional `sampler` and `capabilities` parameters, or set individually for
-    backward compatibility. When provided, `sampler` overrides individual sampler fields.
+    Sampler fields can be derived from merged launch args via the optional
+    ``sampler_args`` mapping, or set individually for backward compatibility.
+    When provided, ``sampler_args`` overrides individual sampler fields.
     """
 
     port: int
@@ -63,25 +84,11 @@ class ChatCompletionConfig:
     reasoning_template_value: bool | str | None = None
 
     # New profile-derived fields (override individual fields when set)
-    sampler: SamplerSettings | None = None
-    capabilities: FamilyCapabilities | None = None
+    sampler_args: dict | None = None
 
     def __post_init__(self):
-        if self.sampler is not None:
-            self.temperature = self.sampler.temperature
-            self.top_p = self.sampler.top_p
-            self.top_k = self.sampler.top_k
-            self.min_p = self.sampler.min_p
-            self.presence_penalty = self.sampler.presence_penalty
-            self.repeat_penalty = self.sampler.repeat_penalty
-
-        if (
-            self.capabilities is not None
-            and self.reasoning_template_key == "enable_thinking"
-            and self.capabilities.reasoning_template_key
-        ):
-            # Use family's template key unless explicitly overridden.
-            self.reasoning_template_key = self.capabilities.reasoning_template_key
+        for field, value in sampler_fields_from_args(self.sampler_args).items():
+            setattr(self, field, value)
 
 
 def run_chat_completion(cfg: ChatCompletionConfig) -> str:
@@ -541,25 +548,12 @@ class TestRunConfig:
     reasoning_template_value: bool | str | None = None
     max_tests_per_category: int | None = None
 
-    # Profile-derived fields (from ResolvedModelProfile)
-    sampler: SamplerSettings | None = None
-    capabilities: FamilyCapabilities | None = None
+    # Profile-derived fields (from ResolvedProfile.args)
+    sampler_args: dict | None = None
 
     def __post_init__(self):
-        if self.sampler is not None:
-            self.temperature = self.sampler.temperature
-            self.top_p = self.sampler.top_p
-            self.top_k = self.sampler.top_k
-            self.min_p = self.sampler.min_p
-            self.presence_penalty = self.sampler.presence_penalty
-            self.repeat_penalty = self.sampler.repeat_penalty
-
-        if (
-            self.capabilities is not None
-            and self.reasoning_template_key == "enable_thinking"
-            and self.capabilities.reasoning_template_key
-        ):
-            self.reasoning_template_key = self.capabilities.reasoning_template_key
+        for field, value in sampler_fields_from_args(self.sampler_args).items():
+            setattr(self, field, value)
 
 
 def run_tests(cfg: TestRunConfig) -> TestSuiteResult:
@@ -622,8 +616,7 @@ def run_tests(cfg: TestRunConfig) -> TestSuiteResult:
                     reasoning=cfg.reasoning,
                     reasoning_template_key=cfg.reasoning_template_key,
                     reasoning_template_value=cfg.reasoning_template_value,
-                    sampler=cfg.sampler,
-                    capabilities=cfg.capabilities,
+                    sampler_args=cfg.sampler_args,
                 )
             )
 
@@ -694,27 +687,7 @@ Please evaluate the following model responses. For each test, rate the response 
     return prompt
 
 
-def save_results_json(result: TestSuiteResult, path: Path) -> None:
-    """Save results to JSON."""
-    data = {
-        "model_name": result.model_name,
-        "backend": result.backend,
-        "overall_score": result.overall_score,
-        "evaluation": summarize_evaluation(result.results),
-        "tests": [
-            {
-                "name": r.name,
-                "category": r.category,
-                "prompt": r.prompt,
-                "response": r.response,
-                "ran": r.ran,
-                "correct": r.correct,
-                "score": r.score,
-            }
-            for r in result.results
-        ],
-    }
-    path.write_text(json.dumps(data, indent=2))
+
 
 
 def save_results_csv(results: list[dict], path: Path) -> None:

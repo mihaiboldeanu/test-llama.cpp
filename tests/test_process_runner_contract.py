@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from rama.domain.runner import RunnerInput, _terminate, run
+from rama.domain.runner import RunnerInput, run, terminate_process
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,7 +47,7 @@ def test_runner_waits_for_health_and_persists_pid(
         assert result.pid > 0
         assert pid_file.exists()
     finally:
-        _terminate(result.pid)
+        terminate_process(result.pid)
         pid_file.unlink(missing_ok=True)
 
 

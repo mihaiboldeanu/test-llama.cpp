@@ -1,22 +1,14 @@
 """Tests for ProfileResolver precedence and provenance."""
+import re
 import unittest
 from pathlib import Path
 
-from rama.domain.models import (
-    ContextPolicy,
-    FamilyCapabilities,
-    FamilyDefaults,
-    FamilyDefinition,
-    LaunchSettings,
-    MemorySettings,
-    ModelInfo,
-    SamplerSettings,
-)
+from rama.domain.models import FamilyDefinition, ModelInfo
 from rama.domain.resolver import ProfileResolver
 
 
 class TestProfileResolver(unittest.TestCase):
-    """Verify resolver precedence and provenance tracking."""
+    """Verify args-map merging precedence and provenance tracking."""
 
     def setUp(self):
         self.model = ModelInfo(
@@ -27,208 +19,185 @@ class TestProfileResolver(unittest.TestCase):
         )
         self.family = FamilyDefinition(
             key="qwen",
-            matchers=(r"qwen",),
-            capabilities=FamilyCapabilities(supports_reasoning=True, reasoning_template_key="enable_thinking"),
-            defaults=FamilyDefaults(
-                sampler=SamplerSettings(temperature=0.6, top_k=20),
-                context=ContextPolicy(small_ctx=24576, large_ctx=131072),
-            ),
+            matchers=(re.compile(r"qwen", re.IGNORECASE),),
         )
 
-    def test_builtin_defaults(self):
+    def test_global_args_provide_defaults(self):
         resolver = ProfileResolver()
-        profile = resolver.resolve(self.model)
-
-        self.assertEqual(profile.sampler.temperature, 0.6)  # Built-in default
-        self.assertEqual(
-            profile.provenance["sampler.temperature"], "built-in default"
+        profile = resolver.resolve(
+            self.model,
+            global_config={"args": {"--temp": 0.6, "--top-k": 20}},
         )
-        self.assertEqual(profile.provenance["memory.use_mmap"], "built-in default")
+
+        self.assertEqual(profile.args["--temp"], 0.6)
+        self.assertEqual(profile.provenance["args.--temp"], "global config")
 
     def test_family_overrides_global(self):
-        """Family defaults beat global config."""
-        global_cfg = {"temperature": 0.9, "top_k": 50}
+        """Family config beats global config."""
         resolver = ProfileResolver(self.family)
-        profile = resolver.resolve(self.model, global_config=global_cfg)
+        profile = resolver.resolve(
+            self.model,
+            global_config={"args": {"--temp": 0.9, "--top-k": 50}},
+            family_override={"args": {"--temp": 0.6}},
+        )
 
-        self.assertEqual(profile.sampler.temperature, 0.6)  # Family wins
-        self.assertIn("sampler.temperature", profile.provenance)
-        self.assertEqual(profile.provenance["sampler.temperature"], "family default")
+        self.assertEqual(profile.args["--temp"], 0.6)
+        self.assertEqual(profile.provenance["args.--temp"], "family config")
+        self.assertEqual(profile.args["--top-k"], 50)
+        self.assertEqual(profile.provenance["args.--top-k"], "global config")
 
     def test_cli_overrides_everything(self):
         """CLI overrides beat family and global."""
-        cli = {"temperature": 0.1, "top_p": 0.9}
         resolver = ProfileResolver(self.family)
-        profile = resolver.resolve(self.model, cli_override=cli)
+        profile = resolver.resolve(
+            self.model,
+            global_config={"args": {"--temp": 0.9}},
+            family_override={"args": {"--temp": 0.6}},
+            cli_override={"args": {"--temp": 0.1, "--top-p": 0.9}},
+        )
 
-        self.assertEqual(profile.sampler.temperature, 0.1)
-        self.assertEqual(profile.provenance["sampler.temperature"], "CLI override")
-        self.assertEqual(profile.provenance["sampler.top_p"], "CLI override")
+        self.assertEqual(profile.args["--temp"], 0.1)
+        self.assertEqual(profile.provenance["args.--temp"], "CLI override")
+        self.assertEqual(profile.provenance["args.--top-p"], "CLI override")
 
     def test_full_precedence_chain(self):
-        """Verify full precedence: CLI > batch > model > family > global > builtin."""
+        """Verify full precedence: CLI > batch > model > family > global."""
         resolver = ProfileResolver(self.family)
         profile = resolver.resolve(
             self.model,
-            global_config={"temperature": 0.9, "top_k": 50},
-            model_override={"temperature": 0.8},
-            batch_override={"temperature": 0.7},
-            cli_override={"temperature": 0.1},
+            global_config={"args": {"--temp": 0.9, "--top-k": 50}},
+            family_override={"args": {"--temp": 0.8}},
+            model_override={"args": {"--temp": 0.7}},
+            batch_override={"args": {"--temp": 0.2}},
+            cli_override={"args": {"--temp": 0.1}},
         )
 
-        # CLI wins for temperature
-        self.assertEqual(profile.sampler.temperature, 0.1)
-        self.assertEqual(profile.provenance["sampler.temperature"], "CLI override")
+        self.assertEqual(profile.args["--temp"], 0.1)
+        self.assertEqual(profile.provenance["args.--temp"], "CLI override")
+        self.assertEqual(profile.args["--top-k"], 50)
+        self.assertEqual(profile.provenance["args.--top-k"], "global config")
 
-        # Family wins for top_k (since global is weaker)
-        self.assertEqual(profile.sampler.top_k, 20)
-        self.assertEqual(profile.provenance["sampler.top_k"], "family default")
-
-    def test_capabilities_from_family(self):
+    def test_null_drops_an_inherited_flag(self):
         resolver = ProfileResolver(self.family)
-        profile = resolver.resolve(self.model)
+        profile = resolver.resolve(
+            self.model,
+            global_config={"args": {"--kv-unified": True}},
+            model_override={"args": {"--kv-unified": None}},
+        )
 
-        self.assertTrue(profile.capabilities.supports_reasoning)
-        self.assertEqual(profile.capabilities.reasoning_template_key, "enable_thinking")
+        self.assertNotIn("--kv-unified", profile.args)
         self.assertEqual(
-            profile.provenance["capabilities.supports_reasoning"],
-            "family default",
+            profile.provenance["args.--kv-unified"], "model override (removed)"
         )
 
-    # ---- Multi-class merging tests (Phase 1 completion) ----
+    def test_legacy_semantic_keys_are_translated(self):
+        resolver = ProfileResolver()
+        profile = resolver.resolve(
+            self.model,
+            cli_override={"temp": 0.5, "ctx": 4096, "reasoning": False},
+        )
 
-    def test_context_merged_through_precedence(self):
-        """Context settings go through full precedence chain."""
+        self.assertEqual(profile.args["--temp"], 0.5)
+        self.assertEqual(profile.args["--ctx-size"], 4096)
+        self.assertEqual(profile.args["--reasoning"], "off")
+        self.assertFalse(profile.reasoning)
+
+    def test_ctx_auto_uses_family_thresholds(self):
+        resolver = ProfileResolver(self.family)
+        small = resolver.resolve(
+            self.model,
+            global_config={"rules": {"small_threshold_gb": 10}},
+            family_override={"small_ctx": 24576, "large_ctx": 131072},
+        )
+        large_model = ModelInfo(
+            name="large-model",
+            path=Path("large.gguf"),
+            size_bytes=20 * 1024**3,
+            family_key="qwen",
+        )
+        large = resolver.resolve(
+            large_model,
+            global_config={"rules": {"small_threshold_gb": 10}},
+            family_override={"small_ctx": 24576, "large_ctx": 131072},
+        )
+
+        self.assertEqual(small.ctx, 24576)
+        self.assertEqual(small.args["--ctx-size"], 24576)
+        self.assertEqual(large.ctx, 131072)
+
+    def test_fit_ctx_auto_tracks_ctx(self):
         resolver = ProfileResolver(self.family)
         profile = resolver.resolve(
             self.model,
-            global_config={"small_ctx": 8192},
-            model_override={"small_ctx": 16384},
-            cli_override={"large_ctx": 262144},
+            global_config={"args": {"--fit-ctx": "auto"}},
+            family_override={"small_ctx": 24576, "large_ctx": 131072},
         )
 
-        # Family default (24576) beats global (8192) for small_ctx since no model/cli override
-        # But model_override (16384) beats family (24576)
-        self.assertEqual(profile.context.small_ctx, 16384)
-        self.assertEqual(profile.provenance["context.small_ctx"], "model override")
+        self.assertEqual(profile.fit_ctx, profile.ctx)
+        self.assertEqual(profile.args["--fit-ctx"], profile.ctx)
 
-        # CLI wins for large_ctx
-        self.assertEqual(profile.context.large_ctx, 262144)
-        self.assertEqual(profile.provenance["context.large_ctx"], "CLI override")
+    def test_moe_fit_ctx_skip_removes_fit_ctx(self):
+        family = FamilyDefinition(
+            key="gemma",
+            matchers=(re.compile(r"gemma", re.IGNORECASE),),
+            moe_fit_ctx_skip=True,
+        )
+        model = ModelInfo(
+            name="gemma-4-26B-A4B-it-UD-Q8_K_XL",
+            path=Path("gemma.gguf"),
+            size_bytes=26 * 1024**3,
+            family_key="gemma",
+        )
+        profile = ProfileResolver(family).resolve(model)
 
-    def test_memory_merged_through_precedence(self):
-        """Memory settings go through full precedence chain."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
+        self.assertIsNone(profile.fit_ctx)
+        self.assertNotIn("--fit-ctx", profile.args)
+
+    def test_reasoning_auto_follows_size_threshold(self):
+        resolver = ProfileResolver(self.family)
+        small = resolver.resolve(self.model)
+        large_model = ModelInfo(
+            name="large-model",
+            path=Path("large.gguf"),
+            size_bytes=20 * 1024**3,
+            family_key="qwen",
+        )
+        large = resolver.resolve(large_model)
+
+        self.assertFalse(small.reasoning)
+        self.assertEqual(small.args["--reasoning"], "off")
+        self.assertTrue(large.reasoning)
+        self.assertEqual(large.args["--reasoning"], "on")
+
+    def test_reasoning_preserve_requires_reasoning_on(self):
+        resolver = ProfileResolver(self.family)
+        on = resolver.resolve(
             self.model,
-            global_config={"fit_target_mib": 2048},
-            model_override={"use_mmap": False},
-            cli_override={"n_gpu_layers": -1},
+            family_override={"reasoning_preserve": True, "small_ctx": 1, "large_ctx": 2},
+            cli_override={"--ctx-size": 2, "--reasoning": True},
         )
-
-        self.assertEqual(profile.memory.fit_target_mib, 2048)
-        self.assertEqual(profile.provenance["memory.fit_target_mib"], "global config")
-        self.assertFalse(profile.memory.use_mmap)
-        self.assertEqual(profile.provenance["memory.use_mmap"], "model override")
-        self.assertEqual(profile.memory.n_gpu_layers, -1)
-        self.assertEqual(profile.provenance["memory.n_gpu_layers"], "CLI override")
-
-    def test_launch_merged_through_precedence(self):
-        """Launch settings go through full precedence chain."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
+        off = resolver.resolve(
             self.model,
-            global_config={"backend": "turboquant"},
-            cli_override={"seed": 42},
+            family_override={"reasoning_preserve": True, "small_ctx": 1, "large_ctx": 2},
+            cli_override={"--ctx-size": 2, "--reasoning": False},
         )
 
-        self.assertEqual(profile.launch.backend, "turboquant")
-        self.assertEqual(profile.provenance["launch.backend"], "global config")
-        self.assertEqual(profile.launch.seed, 42)
-        self.assertEqual(profile.provenance["launch.seed"], "CLI override")
+        self.assertIn("--reasoning-preserve", on.args)
+        self.assertNotIn("--reasoning-preserve", off.args)
 
-    def test_nested_override_format(self):
-        """Nested override format works: {"sampler": {...}, "context": {...}}."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
-            self.model,
-            cli_override={
-                "sampler": {"temperature": 0.1},
-                "context": {"small_ctx": 4096},
-                "memory": {"fit_target_mib": 512},
-                "launch": {"seed": 99},
-            },
-        )
-
-        self.assertEqual(profile.sampler.temperature, 0.1)
-        self.assertEqual(profile.provenance["sampler.temperature"], "CLI override")
-        self.assertEqual(profile.context.small_ctx, 4096)
-        self.assertEqual(profile.provenance["context.small_ctx"], "CLI override")
-        self.assertEqual(profile.memory.fit_target_mib, 512)
-        self.assertEqual(profile.provenance["memory.fit_target_mib"], "CLI override")
-        self.assertEqual(profile.launch.seed, 99)
-        self.assertEqual(profile.provenance["launch.seed"], "CLI override")
-
-    def test_mixed_override_format(self):
-        """Flat and nested keys can be mixed in same override dict."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
-            self.model,
-            cli_override={
-                "temperature": 0.2,  # flat -> sampler
-                "context": {"large_ctx": 512000},  # nested
-                "fit_target_mib": 256,  # flat -> memory
-            },
-        )
-
-        self.assertEqual(profile.sampler.temperature, 0.2)
-        self.assertEqual(profile.context.large_ctx, 512000)
-        self.assertEqual(profile.memory.fit_target_mib, 256)
-
-    def test_zero_and_false_are_valid_overrides(self):
-        """False, 0, and empty collections are legitimate overrides."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
-            self.model,
-            cli_override={
-                "use_mmap": False,
-                "top_k": 0,
-                "min_p": 0.0,
-            },
-        )
-
-        self.assertFalse(profile.memory.use_mmap)
-        self.assertEqual(profile.provenance["memory.use_mmap"], "CLI override")
-        self.assertEqual(profile.sampler.top_k, 0)
-        self.assertEqual(profile.provenance["sampler.top_k"], "CLI override")
-        self.assertEqual(profile.sampler.min_p, 0.0)
-        self.assertEqual(profile.provenance["sampler.min_p"], "CLI override")
-
-    def test_family_context_beats_global(self):
-        """Family context defaults beat global config."""
+    def test_mtp_and_env_merge_by_level(self):
         resolver = ProfileResolver(self.family)
         profile = resolver.resolve(
             self.model,
-            global_config={"small_ctx": 8192, "large_ctx": 4096},
+            global_config={"rules": {"mtp_ctx_ratio": 0.8}, "env": {"A": "1"}},
+            family_override={"mtp": {"n_max": 4}, "env": {"B": "2"}},
+            model_override={"mtp": {"p_min": 0}},
         )
 
-        # Family (24576) beats global (8192)
-        self.assertEqual(profile.context.small_ctx, 24576)
-        self.assertEqual(profile.provenance["context.small_ctx"], "family default")
-        # Family (131072) beats global (4096)
-        self.assertEqual(profile.context.large_ctx, 131072)
-        self.assertEqual(profile.provenance["context.large_ctx"], "family default")
-
-    def test_temp_alias_routes_to_temperature(self):
-        """Historical 'temp' key in config is aliased to 'temperature'."""
-        resolver = ProfileResolver()
-        profile = resolver.resolve(
-            self.model,
-            cli_override={"temp": 0.5},
-        )
-
-        self.assertEqual(profile.sampler.temperature, 0.5)
-        self.assertEqual(profile.provenance["sampler.temperature"], "CLI override")
+        self.assertEqual(profile.mtp["ctx_ratio"], 0.8)
+        self.assertEqual(profile.mtp["n_max"], 4)
+        self.assertEqual(profile.mtp["p_min"], 0)
+        self.assertEqual(profile.env, {"A": "1", "B": "2"})
 
 
 if __name__ == "__main__":

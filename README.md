@@ -94,6 +94,19 @@ families:
     min_p: 0.0
     repeat_penalty: 1.0
 
+  qwen3.8-flash-next:
+    default_reasoning: true
+    small_ctx: 24576
+    large_ctx: 131072
+    load_mode: mmap
+    tensor_read_lazy: "on"
+    temp: 1.0
+    top_k: 20
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 0.0
+
   qwen3.8:
     # Native thinking mode uses a distinct official sampling profile.
     default_reasoning: true
@@ -170,6 +183,19 @@ families:
     top_k: 64
     top_p: 0.95
     min_p: 0.05
+
+  spark:
+    # 98304 total ctx with n_parallel 3 = 32768 tokens per chat.
+    default_reasoning: true
+    small_ctx: 98304
+    large_ctx: 98304
+    n_parallel: 3
+    temp: 1.0
+    top_k: 0
+    top_p: 0.95
+    min_p: 0.0
+    repeat_penalty: 1.0
+    presence_penalty: 0.0
 ```
 
 Models below 10GB get `small_ctx`, otherwise `large_ctx` (uniform threshold across families).

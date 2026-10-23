@@ -20,7 +20,7 @@ class TestRepeatPenaltyTranslation(unittest.TestCase):
 
     def test_top_level_translation(self):
         cfg = self._make_cfg({"repetition_penalty": 1.05})
-        self.assertEqual(cfg["repeat_penalty"], 1.05)
+        self.assertEqual(cfg["--repeat-penalty"], 1.05)
         self.assertNotIn("repetition_penalty", cfg)
 
     def test_family_translation(self):
@@ -29,7 +29,7 @@ class TestRepeatPenaltyTranslation(unittest.TestCase):
                 "qwen": {"repetition_penalty": 1.1}
             }
         })
-        self.assertEqual(cfg["families"]["qwen"]["repeat_penalty"], 1.1)
+        self.assertEqual(cfg["families"]["qwen"]["--repeat-penalty"], 1.1)
 
     def test_model_translation(self):
         cfg = self._make_cfg({
@@ -37,7 +37,9 @@ class TestRepeatPenaltyTranslation(unittest.TestCase):
                 "my_model": {"repetition_penalty": 1.2}
             }
         })
-        self.assertEqual(cfg["models"]["my_model"]["repeat_penalty"], 1.2)
+        self.assertEqual(
+            cfg["models"]["my_model"]["--repeat-penalty"], 1.2
+        )
 
     def test_translation_emits_deprecation_warning(self):
         import warnings
@@ -46,19 +48,28 @@ class TestRepeatPenaltyTranslation(unittest.TestCase):
             self._make_cfg({"repetition_penalty": 1.05})
             rep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
             self.assertEqual(len(rep_warnings), 1)
-            self.assertIn("repeat_penalty", str(rep_warnings[0].message))
+            self.assertIn("repeat-penalty", str(rep_warnings[0].message))
 
 
 class TestFitTargetMibResolution(unittest.TestCase):
     """Ensure fit_target_mib resolves from config, not hardcoded."""
 
     def test_fit_target_mib_comes_from_config(self):
-        from rama.launch import resolve
+        from pathlib import Path
 
-        cfg = {"fit_target_mib": 512}
-        # resolve is the helper that pulls values with precedence
-        val = resolve({}, {}, "fit_target_mib", default=1024, config=cfg)
-        self.assertEqual(val, 512)
+        from rama.domain.models import ModelInfo
+        from rama.domain.resolver import ProfileResolver
+
+        model = ModelInfo(
+            name="test-model",
+            path=Path("test.gguf"),
+            size_bytes=4 * 1024**3,
+            family_key="qwen",
+        )
+        cfg = {"args": {"--fit-target": 512}}
+        # The ProfileResolver is the single precedence path for launch settings.
+        profile = ProfileResolver().resolve(model, global_config=cfg)
+        self.assertEqual(profile.args["--fit-target"], 512)
 
 
 class TestCLIConfigPassing(unittest.TestCase):

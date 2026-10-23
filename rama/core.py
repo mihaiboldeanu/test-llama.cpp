@@ -6,13 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import Config
-from .domain.gguf import read_gguf_metadata
+from .domain.gguf import is_moe_from_metadata, read_gguf_metadata
+from .domain.models import ModelInfo
+from .domain.runner import default_pid_dir
 from .families import (
     detect_family as _families_detect_family,
 )
 from .families import (
     detect_quant,
     detect_tags,
+    hybrid_kv_ctx,
     kv_bytes_per_token,
 )
 
@@ -42,46 +45,6 @@ def _sweep_stale_pids() -> None:
 
 
 @dataclass
-class ModelInfo:
-    """Discovered GGUF model."""
-
-    name: str
-    path: Path
-    size_gb: float
-    family: str
-    quant: str
-    tags: list[str] = None
-    metadata: dict | None = None
-
-    def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
-
-    @property
-    def is_moe(self) -> bool:
-        """Detect MoE architecture from GGUF metadata, falling back to name."""
-        from .domain.gguf import is_moe_from_metadata
-
-        if self.metadata is not None:
-            return is_moe_from_metadata(self.metadata)
-        lower = self.name.lower()
-        return any(kw in lower for kw in ("a4b", "a3b", "a18b", "moe", "mixture"))
-
-    def to_domain(self) -> "DomainModelInfo":  # noqa: F821
-        """Convert to domain.ModelInfo for ProfileResolver."""
-        from .domain.models import ModelInfo as DomainModelInfo
-
-        return DomainModelInfo(
-            name=self.name,
-            path=self.path,
-            size_bytes=int(self.size_gb * 1024**3),
-            family_key=self.family,
-            quantization=self.quant if self.quant != "unknown" else None,
-            metadata=self.metadata,
-        )
-
-
-@dataclass
 class RunningModel:
     """A model currently running."""
 
@@ -93,9 +56,7 @@ class RunningModel:
 
 def get_pid_dir() -> Path:
     """Get the PID file directory."""
-    pid_dir = Path.home() / ".local" / "state" / "rama" / "pids"
-    pid_dir.mkdir(parents=True, exist_ok=True)
-    return pid_dir
+    return default_pid_dir()
 
 
 def discover_models(config: Config) -> list[ModelInfo]:
@@ -123,19 +84,18 @@ def discover_models(config: Config) -> list[ModelInfo]:
             continue
 
         name = gguf.stem
-        size_gb = gguf.stat().st_size / (1024**3)
         quant = detect_quant(name)
         family = detect_family(gguf)
-        tags = detect_tags(name)
+        tags = tuple(detect_tags(name))
         metadata = read_gguf_metadata(gguf)
 
         models.append(
             ModelInfo(
                 name=name,
                 path=gguf,
-                size_gb=round(size_gb, 1),
-                family=family,
-                quant=quant,
+                size_bytes=gguf.stat().st_size,
+                family_key=family,
+                quantization=quant,
                 tags=tags,
                 metadata=metadata,
             ),
@@ -149,15 +109,15 @@ def discover_models(config: Config) -> list[ModelInfo]:
             continue
 
         first_part = parts[1]
-        size_gb = sum(path.stat().st_size for path in parts.values()) / (1024**3)
+        size_bytes = sum(path.stat().st_size for path in parts.values())
         models.append(
             ModelInfo(
                 name=base,
                 path=first_part,
-                size_gb=round(size_gb, 1),
-                family=detect_family(first_part),
-                quant=detect_quant(base),
-                tags=detect_tags(base),
+                size_bytes=size_bytes,
+                family_key=detect_family(first_part),
+                quantization=detect_quant(base),
+                tags=tuple(detect_tags(base)),
                 metadata=read_gguf_metadata(first_part),
             )
         )
@@ -186,22 +146,62 @@ def calc_kv_cache(
     metadata: dict | None = None,
     ctk: str | None = None,
     ctv: str | None = None,
+    extra_args: dict | None = None,
 ) -> tuple[int, str, str]:
     """Calculate max KV cache that fits in VRAM.
 
     Uses the families registry for per-family KV bytes-per-token estimates.
     If GGUF metadata is provided, uses exact architecture fields for calculation.
+    ``extra_args`` carries model-level (or fully merged) launch flags so the
+    estimate can see offload signals like ``--n-cpu-moe``/``--moe-cache-mib``.
     Returns: (ctx_size, qk_type, qkv_type)
     """
     if model_size_gb < 0:
         raise ValueError(f"Model size cannot be negative: {model_size_gb}")
 
     vram_available = max(config.vram_available_gb, 0)
-    kv_vram = max(vram_available - max(model_size_gb, 0), 0.1)
 
     family_params = config.families.get(family, {})
-    cache_type_k = ctk or family_params.get("ctk")
-    cache_type_v = ctv or family_params.get("ctv")
+    family_args = family_params.get("args", {}) if isinstance(family_params, dict) else {}
+    merged_args = dict(family_args)
+    if extra_args:
+        merged_args.update(extra_args)
+
+    def _flag_on(key: str) -> bool:
+        value = merged_args.get(key)
+        return value is not None and value is not False and str(value).lower() not in (
+            "0", "off", "false", "null", "none", ""
+        )
+
+    # MoE models run with experts on the host (explicit --n-cpu-moe/--cpu-moe,
+    # a configured --moe-cache-mib, or an unloadable size spilling via --fit).
+    # Charging the full weight file to VRAM pins the estimate at the floor,
+    # so charge only the GPU-resident dense stack plus the expert cache.
+    moe_cache_gib = 0.0
+    if _flag_on("--moe-cache-mib"):
+        try:
+            moe_cache_gib = float(merged_args["--moe-cache-mib"]) / 1024
+        except (TypeError, ValueError):
+            moe_cache_gib = 0.0
+    host_experts = any(
+        _flag_on(k) for k in ("--n-cpu-moe", "--cpu-moe", "--moe-cache-mib")
+    ) or (
+        metadata is not None
+        and is_moe_from_metadata(metadata)
+        and model_size_gb > vram_available
+    )
+    gpu_weights_gb = 4.0 + moe_cache_gib if host_experts else max(model_size_gb, 0)
+    kv_vram = max(vram_available - gpu_weights_gb, 0.1)
+    cache_type_k = (
+        ctk
+        or family_args.get("-ctk")
+        or (family_params.get("ctk") if isinstance(family_params, dict) else None)
+    )
+    cache_type_v = (
+        ctv
+        or family_args.get("-ctv")
+        or (family_params.get("ctv") if isinstance(family_params, dict) else None)
+    )
     kv_per_token = kv_bytes_per_token(
         family,
         model_size_gb,
@@ -211,6 +211,21 @@ def calc_kv_cache(
     )
     resolved_ctk = cache_type_k or "q8_0"
     resolved_ctv = cache_type_v or cache_type_k or "q8_0"
+
+    # Hybrid SWA families: SWA layers saturate at the window instead of
+    # scaling with ctx, so solve the closed form instead of dividing the
+    # budget by the dense worst case.
+    hybrid_ctx = hybrid_kv_ctx(
+        int(kv_vram * 1024**3), family, metadata, cache_type_k, cache_type_v
+    )
+    if hybrid_ctx is not None:
+        max_ctx_limit = 262144
+        preferred = get_preferred_ctx(model_size_gb, family, config)
+        return (
+            min(max(hybrid_ctx, 2048), max_ctx_limit, preferred),
+            resolved_ctk,
+            resolved_ctv,
+        )
 
     # Very tight VRAM — minimal context
     if kv_vram < 1:
@@ -247,30 +262,26 @@ def get_preferred_ctx(
 ) -> int:
     """Get preferred context size based on model size and family.
 
-    Uses small_ctx for models below 10GB, large_ctx otherwise.
-    Applies config overrides via ProfileResolver for consistency with launch.
+    Uses small_ctx for models below the configured threshold, large_ctx
+    otherwise.  Applies global/family overrides through the same resolver used
+    by launch.
     """
-    from .domain.resolver import ProfileResolver
-    from .families import get_registry
+    from .domain.resolver import resolve_context_size
 
-    reg_fam = get_registry().get(family)
-    threshold = 10
-
-    # Use ProfileResolver to apply config.families and global config overrides
-    if reg_fam is not None:
-        resolver = ProfileResolver(family_definition=reg_fam)
-        family_override = (config.get("families") or {}).get(family) or None
-        profile = resolver.resolve(
-            None,  # No model info needed for context defaults
+    family_override = (config.get("families") or {}).get(family) or None
+    try:
+        return resolve_context_size(
+            model_size_gb,
+            family_key=family,
             global_config=config._data if hasattr(config, "_data") else None,
             family_override=family_override,
         )
-        return profile.context.small_ctx if model_size_gb < threshold else profile.context.large_ctx
-
-    # Fallback when family not in registry
-    if model_size_gb < threshold:
-        return 0
-    return 131072
+    except ValueError:
+        # Fall back to the documented global defaults when a partial config
+        # does not provide usable context rules.
+        if model_size_gb < 10:
+            return 32768
+        return 65536
 
 
 def find_free_port(config: Config | None, start_port: int | None = None) -> int:

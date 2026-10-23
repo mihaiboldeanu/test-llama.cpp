@@ -2,6 +2,11 @@
 
 This module contains neutral types that must not import application services
 or CLI code to prevent circular dependencies.
+
+After the args-map refactor, all launch settings live in rama.yaml as literal
+llama-server flags (``args:`` blocks). The resolver merges them (global ->
+family -> model -> CLI) and only computes what is genuinely runtime: identity
+flags, ctx size, fit-ctx, the reasoning toggle, and the MTP block.
 """
 
 from __future__ import annotations
@@ -9,102 +14,42 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .gguf import is_moe_from_metadata
+
 if TYPE_CHECKING:
     import re
     from pathlib import Path
 
 
 @dataclass(frozen=True)
-class FamilyCapabilities:
-    """Declarative capabilities of a model family."""
-
-    supports_reasoning: bool = False
-    reasoning_template_key: str | None = None  # e.g., "enable_thinking"
-    reasoning_disabled_value: bool | str | None = None
-    supports_ngram_speculation: bool = True
-    skip_chat_parsing: bool = False
-    # Memory defaults
-    default_no_mmap: bool = False  # Disable mmap by default (known loading issues)
-    # MoE workarounds
-    avoid_fit_ctx_for_moe: bool = False  # Skip --fit-ctx for MoE models of this family
-    # Reasoning launch behavior (facts, not decisions)
-    reasoning_preserve_thinking_ctk: bool = (
-        False  # Add preserve_thinking to chat-template-kwargs
-    )
-    reasoning_use_no_mmproj: bool = False  # Add --no-mmproj in reasoning mode
-    reasoning_use_samplers: bool = False  # Add --samplers in reasoning mode
-    reasoning_use_preserve_flag: bool = False  # Add --reasoning-preserve flag
-
-
-@dataclass(frozen=True)
-class SamplerSettings:
-    """Sampling parameters for generation."""
-
-    temperature: float = 0.6
-    top_k: int = 20
-    top_p: float = 0.95
-    min_p: float = 0.0
-    repeat_penalty: float = 1.0
-    presence_penalty: float = 0.0
-
-
-@dataclass(frozen=True)
-class ContextPolicy:
-    """Context size and KV cache policy."""
-
-    small_ctx: int = 32768
-    large_ctx: int = 65536
-    preferred_ctx: int | None = None
-
-
-@dataclass(frozen=True)
-class MemorySettings:
-    """Memory and VRAM allocation policy."""
-
-    fit_target_mib: int = 1024  # Safety margin in MiB
-    use_mmap: bool = True
-    n_gpu_layers: int | None = None  # None means auto
-
-
-@dataclass(frozen=True)
-class LaunchSettings:
-    """Backend launch arguments and environment."""
-
-    backend: str = "llama.cpp"
-    ctk: str | None = None  # KV cache key type
-    ctv: str | None = None  # KV cache value type
-    mtp: bool = False
-    mtp_n_max: int = 3
-    mtp_n_min: int = 0
-    seed: int | None = None
-
-
-@dataclass(frozen=True)
-class FamilyDefaults:
-    """Portable defaults for a model family."""
-
-    sampler: SamplerSettings = field(default_factory=SamplerSettings)
-    context: ContextPolicy = field(default_factory=ContextPolicy)
-
-
-@dataclass(frozen=True)
 class ModelInfo:
-    """Discovered model metadata."""
+    """Discovered GGUF model."""
 
     name: str
     path: Path
     size_bytes: int
     family_key: str
     quantization: str | None = None
+    tags: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, Any] | None = None
 
     @property
+    def family(self) -> str:
+        return self.family_key
+
+    @property
+    def quant(self) -> str:
+        return self.quantization or "unknown"
+
+    @property
     def size_gb(self) -> float:
-        return self.size_bytes / (1024**3)
+        return round(self.size_bytes / (1024**3), 1)
 
     @property
     def is_moe(self) -> bool:
-        """Detect MoE architecture from model name."""
+        """Detect MoE architecture from GGUF metadata, falling back to name."""
+        if self.metadata is not None:
+            return is_moe_from_metadata(self.metadata)
         lower = self.name.lower()
         return any(kw in lower for kw in ("a4b", "a3b", "a18b", "moe", "mixture"))
 
@@ -119,26 +64,39 @@ class KvEstimator(Protocol):
 
 @dataclass(frozen=True)
 class FamilyDefinition:
-    """Complete definition of a model family."""
+    """Complete definition of a model family.
+
+    Matchers and KV estimators are code-side knowledge (regex + architecture
+    heuristics). Every launch value lives in rama.yaml.
+    """
 
     key: str
     matchers: tuple[re.Pattern[str], ...]
-    capabilities: FamilyCapabilities = field(default_factory=FamilyCapabilities)
-    defaults: FamilyDefaults = field(default_factory=FamilyDefaults)
     kv_estimator: KvEstimator | None = None
+    moe_fit_ctx_skip: bool = False
+    # Hybrid SWA/full-attention architecture: (sliding window, fraction of
+    # layers with full attention). Only set for families where the recipe is
+    # confirmed (measured VRAM or documented); the GGUF headers carry no
+    # window info, so unlisted families keep the dense worst-case estimate.
+    hybrid: tuple[int, float] | None = None
 
 
 @dataclass(frozen=True)
-class ResolvedModelProfile:
-    """Fully resolved model profile with provenance tracking.
+class ResolvedProfile:
+    """Fully resolved launch profile: merged llama-server args + provenance.
 
-    This is the single source of truth passed to launchers and request planners.
+    ``args`` contains only actual llama-server flags (values as strings/numbers;
+    ``True`` means a bare presence-flag; keys removed by an override are absent).
+    The remaining fields are the documented runtime computations: ctx size,
+    fit-ctx, the reasoning toggle, MTP rule data, env and identity.
     """
 
     model: ModelInfo
-    context: ContextPolicy
-    sampler: SamplerSettings
-    memory: MemorySettings
-    launch: LaunchSettings
-    capabilities: FamilyCapabilities
+    args: dict[str, Any]
+    ctx: int
+    fit_ctx: int | None
+    reasoning: bool
+    mtp: dict[str, Any]
+    env: dict[str, Any]
+    alias: str
     provenance: dict[str, str] = field(default_factory=dict)

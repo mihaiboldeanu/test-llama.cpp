@@ -1,7 +1,8 @@
 """Declarative model family registry.
 
 Replaces switch-statement detection in core.py with a data-driven registry.
-Each family declares its matchers, capabilities, defaults, and KV cache estimator.
+Each family declares its matchers, KV cache estimator, and MoE fit-context
+rule. Every launch value lives in rama.yaml.
 """
 
 from __future__ import annotations
@@ -12,16 +13,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .domain.gguf import kv_bytes_per_token_exact
-from .domain.models import (
-    ContextPolicy,
-    FamilyCapabilities,
-    FamilyDefaults,
-    FamilyDefinition,
-    KvEstimator,
-    ModelInfo,
-    SamplerSettings,
-)
+from .domain.gguf import get_block_count, kv_bytes_per_token_exact
+from .domain.models import FamilyDefinition, KvEstimator, ModelInfo
 
 # ---------------------------------------------------------------------------
 # KV Cache Estimators (strategy pattern)
@@ -44,6 +37,7 @@ class _SizeBandKvEstimator:
 
 
 _QWEN_KV = _SizeBandKvEstimator(((10, 11000), (20, 22000), (35, 45000), (None, 60000)))
+_QWEN_FLASH_NEXT_KV = _SizeBandKvEstimator(((None, 49152),))
 _GEMMA_KV = _SizeBandKvEstimator(((10, 5000), (25, 25000), (None, 40000)))
 _BONSAI_KV = _SizeBandKvEstimator(((2, 57344), (None, 65536)))
 _NEX_N2_KV = _SizeBandKvEstimator(((None, 10240),))
@@ -58,8 +52,28 @@ _ORNITH_KV = _SizeBandKvEstimator(((10, 11000), (None, 45000)))
 _LAGUNA_KV = _SizeBandKvEstimator(((None, 45000),))
 _NORTH_CODE_KV = _SizeBandKvEstimator(((None, 45000),))
 _MELLUM_KV = _SizeBandKvEstimator(((None, 25000),))
+# Flint: 49 layers, 4 KV heads, 128-dim heads -> 50,176 B/token (q8) on the
+# dense worst case. The hybrid SWA helper below cuts that to the real cache
+# shape (35 SWA layers at the 513-token window + 14 full-attention layers).
+_FLINT_KV = _SizeBandKvEstimator(((None, 50176),))
+_FLINT_HYBRID: tuple[int, float] = (513, 14 / 49)
 _GPT_OSS_KV = _SizeBandKvEstimator(((30, 24576), (None, 36864)))
 _MUSE_KV = _SizeBandKvEstimator(((None, 53248),))
+# Spark-X2.5 is a hybrid SWA/full-attention dense model (1 full layer per 3
+# SWA layers, window 512), so its KV cache is much smaller than a dense model
+# of the same size. The hybrid recipe below amortizes the exact metadata dims;
+# the size band only applies when GGUF metadata is unreadable.
+_SPARK_KV = _SizeBandKvEstimator(((None, 16384),))
+_SPARK_HYBRID: tuple[int, float] = (512, 0.25)
+# MiniCPM5-2B: 42 layers, GQA with 2 KV heads and 128-dim heads -> about
+# 21.5KB per token with q8 KV; exact GGUF metadata wins when available.
+_MINICPM5_KV = _SizeBandKvEstimator(((None, 22000),))
+# Nanbeige4.2-3B: custom Looped Transformer, so the size-band fallback is
+# sized like a dense small Qwen; exact GGUF metadata wins when readable.
+_NANBEIGE_KV = _SizeBandKvEstimator(((10, 11000), (None, 22000)))
+# NeoHorse-1-4B: Qwen3.5-4B architecture (text-only repackage), so KV cache
+# sits in the same size bands as a small dense Qwen.
+_NEOHORSE_KV = _SizeBandKvEstimator(((10, 11000), (None, 22000)))
 
 
 class _MetadataKvEstimator:
@@ -105,8 +119,12 @@ _GLM = [re.compile(r"glm", re.IGNORECASE)]
 _DEVSTRAL = [re.compile(r"devstral", re.IGNORECASE)]
 _MISTRAL_SMALL = [re.compile(r"mistral-small", re.IGNORECASE)]
 _GEMMA = [re.compile(r"gemma", re.IGNORECASE)]
+_HUMANIZER = [re.compile(r"humanizer", re.IGNORECASE)]
 _BONSAI_27 = [re.compile(r"bonsai", re.IGNORECASE), re.compile(r"27b", re.IGNORECASE)]
 _BONSAI = [re.compile(r"bonsai", re.IGNORECASE)]
+_QWEN_38_FLASH_NEXT = [
+    re.compile(r"qwen[._-]?3[._-]?8.*(?:flash.*next|next.*flash)", re.IGNORECASE)
+]
 _QWEN_38 = [re.compile(r"qwen[._-]?3[._-]?8", re.IGNORECASE)]
 _QWEN_CODER = [re.compile(r"qwen3-coder", re.IGNORECASE)]
 _GRUG = [re.compile(r"grug", re.IGNORECASE)]
@@ -122,7 +140,13 @@ _ORNITH = [re.compile(r"ornith", re.IGNORECASE)]
 _LAGUNA = [re.compile(r"laguna", re.IGNORECASE)]
 _NORTH_CODE = [re.compile(r"north", re.IGNORECASE)]
 _MELLUM = [re.compile(r"mellum", re.IGNORECASE)]
+_FLINT = [re.compile(r"flint", re.IGNORECASE)]
 _MUSE = [re.compile(r"muse[-_]glimmer", re.IGNORECASE)]
+_K2HORIZON = [re.compile(r"horizon|mova", re.IGNORECASE)]
+_SPARK = [re.compile(r"spark", re.IGNORECASE)]
+_MINICPM5 = [re.compile(r"minicpm", re.IGNORECASE)]
+_NANBEIGE = [re.compile(r"nanbeige", re.IGNORECASE)]
+_NEOHORSE = [re.compile(r"neohorse", re.IGNORECASE)]
 
 
 # ---------------------------------------------------------------------------
@@ -131,23 +155,27 @@ _MUSE = [re.compile(r"muse[-_]glimmer", re.IGNORECASE)]
 
 
 def _make(
-    matchers: list[re.Pattern[str]], **kwargs: Any
+    matchers: list[re.Pattern[str]],
+    *,
+    key: str,
+    kv_estimator: KvEstimator | None = None,
+    moe_fit_ctx_skip: bool = False,
+    hybrid: tuple[int, float] | None = None,
 ) -> FamilyDefinition:
-    """Helper to build a FamilyDefinition with sensible defaults.
+    """Build a slim family definition.
 
-    If kv_estimator is provided, it's wrapped with _MetadataKvEstimator so that
-    GGUF metadata is tried first before falling back to the size-based heuristic.
+    Only matchers, KV estimators, and the MoE fit-context rule live in code.
+    Every launch value lives in rama.yaml.
     """
-    est = kwargs.get("kv_estimator")
-    # Wrap with metadata-aware estimator (falls back to original if metadata missing)
-    if est is not None:
-        kwargs["kv_estimator"] = _MetadataKvEstimator(est)
+    estimator = (
+        _MetadataKvEstimator(kv_estimator) if kv_estimator is not None else None
+    )
     return FamilyDefinition(
-        key=kwargs.pop("key", ""),
+        key=key,
         matchers=tuple(matchers),
-        capabilities=kwargs.get("capabilities", FamilyCapabilities()),
-        defaults=kwargs.get("defaults", FamilyDefaults()),
-        kv_estimator=kwargs["kv_estimator"],
+        kv_estimator=estimator,
+        moe_fit_ctx_skip=moe_fit_ctx_skip,
+        hybrid=hybrid,
     )
 
 
@@ -211,9 +239,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="glm",
             matchers=_GLM,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_GLM_KV,
         )
     )
@@ -223,9 +248,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="devstral",
             matchers=_DEVSTRAL,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_MISTRAL_KV,
         )
     )
@@ -235,9 +257,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="mistral-small",
             matchers=_MISTRAL_SMALL,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_MISTRAL_KV,
         )
     )
@@ -247,15 +266,17 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="gemma",
             matchers=_GEMMA,
-            capabilities=FamilyCapabilities(
-                supports_ngram_speculation=True,
-                avoid_fit_ctx_for_moe=True,
-                reasoning_use_no_mmproj=True,
-                reasoning_use_samplers=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=32768),
-            ),
+            kv_estimator=_GEMMA_KV,
+            moe_fit_ctx_skip=True,
+        )
+    )
+
+    # Humanizer (jialinyyzz 12B, gemma-4 arch) — filename carries no
+    # gemma marker, so it needs its own matcher. Same KV estimator.
+    reg.register(
+        _make(
+            key="humanizer",
+            matchers=_HUMANIZER,
             kv_estimator=_GEMMA_KV,
         )
     )
@@ -265,14 +286,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="bonsai-27",
             matchers=_BONSAI_27,
-            capabilities=FamilyCapabilities(
-                supports_reasoning=True,
-                reasoning_template_key="enable_thinking",
-                reasoning_disabled_value=False,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=32768),
-            ),
             kv_estimator=_BONSAI_KV,
         )
     )
@@ -282,39 +295,31 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="bonsai",
             matchers=_BONSAI,
-            capabilities=FamilyCapabilities(
-                supports_reasoning=True,
-                reasoning_template_key="enable_thinking",
-                reasoning_disabled_value=False,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=32768),
-            ),
             kv_estimator=_BONSAI_KV,
         )
     )
 
+    # Qwen3.8 Flash Next (before qwen3.8 — its name also contains qwen3.8)
+    # Same Qwen hybrid lineage as qwen3.8 (1 full per 3 SWA, 16K window).
+    reg.register(
+        _make(
+            key="qwen3.8-flash-next",
+            matchers=_QWEN_38_FLASH_NEXT,
+            kv_estimator=_QWEN_FLASH_NEXT_KV,
+            hybrid=(16384, 0.25),
+        )
+    )
+
     # Qwen3.8 (before generic Qwen)
+    # Hybrid attention verified against a live 27B server: the dense formula
+    # predicts ~71K but the box runs 154K in ~5.4GB KV, matching 1-full-per-4
+    # with a 16K sliding window.
     reg.register(
         _make(
             key="qwen3.8",
             matchers=_QWEN_38,
-            capabilities=FamilyCapabilities(
-                supports_ngram_speculation=True,
-                reasoning_preserve_thinking_ctk=True,
-            ),
-            defaults=FamilyDefaults(
-                sampler=SamplerSettings(
-                    temperature=1.0,
-                    top_k=20,
-                    top_p=0.95,
-                    min_p=0.0,
-                    repeat_penalty=1.0,
-                    presence_penalty=0.0,
-                ),
-                context=ContextPolicy(small_ctx=32768, large_ctx=131072),
-            ),
             kv_estimator=_QWEN_KV,
+            hybrid=(16384, 0.25),
         )
     )
 
@@ -323,13 +328,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="qwen-coder",
             matchers=_QWEN_CODER,
-            capabilities=FamilyCapabilities(
-                supports_ngram_speculation=True,
-                reasoning_preserve_thinking_ctk=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=32768, large_ctx=131072),
-            ),
             kv_estimator=_QWEN_KV,
         )
     )
@@ -339,13 +337,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="grug",
             matchers=_GRUG,
-            capabilities=FamilyCapabilities(
-                supports_ngram_speculation=True,
-                reasoning_preserve_thinking_ctk=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=32768, large_ctx=131072),
-            ),
             kv_estimator=_QWEN_KV,
         )
     )
@@ -355,9 +346,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="nex-n2",
             matchers=_NEX_N2,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_NEX_N2_KV,
         )
     )
@@ -367,13 +355,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="qwen",
             matchers=_QWEN,
-            capabilities=FamilyCapabilities(
-                supports_ngram_speculation=True,
-                reasoning_preserve_thinking_ctk=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=32768, large_ctx=131072),
-            ),
             kv_estimator=_QWEN_KV,
         )
     )
@@ -383,9 +364,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="gpt-oss",
             matchers=_GPT_OSS,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_GPT_OSS_KV,
         )
     )
@@ -395,9 +373,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="lfm",
             matchers=_LFM,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_LFM_KV,
         )
     )
@@ -407,9 +382,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="ling",
             matchers=_LING,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_LING_KV,
         )
     )
@@ -419,13 +391,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="nemotron",
             matchers=_NEMOTRON,
-            capabilities=FamilyCapabilities(
-                reasoning_use_no_mmproj=True,
-                reasoning_use_samplers=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=32768),
-            ),
             kv_estimator=_NEMOTRON_KV,
         )
     )
@@ -435,9 +400,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="phi4",
             matchers=_PHI4,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=32768),
-            ),
             kv_estimator=_PHI4_KV,
         )
     )
@@ -447,9 +409,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="granite",
             matchers=_GRANITE,
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=8192, large_ctx=16384),
-            ),
             kv_estimator=_GRANITE_KV,
         )
     )
@@ -459,13 +418,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="ornith",
             matchers=_ORNITH,
-            capabilities=FamilyCapabilities(
-                default_no_mmap=True,
-                reasoning_use_preserve_flag=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_ORNITH_KV,
         )
     )
@@ -475,13 +427,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="laguna",
             matchers=_LAGUNA,
-            capabilities=FamilyCapabilities(
-                default_no_mmap=True,
-                reasoning_use_preserve_flag=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_LAGUNA_KV,
         )
     )
@@ -491,13 +436,6 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="north-code",
             matchers=_NORTH_CODE,
-            capabilities=FamilyCapabilities(
-                default_no_mmap=True,
-                reasoning_use_preserve_flag=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_NORTH_CODE_KV,
         )
     )
@@ -507,14 +445,19 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="mellum",
             matchers=_MELLUM,
-            capabilities=FamilyCapabilities(
-                default_no_mmap=True,
-                reasoning_use_preserve_flag=True,
-            ),
-            defaults=FamilyDefaults(
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_MELLUM_KV,
+        )
+    )
+
+    # Flint (Recursive). 39.8B-A2.5B coding-agent MoE: 2 dense + 47 MoE layers,
+    # 35 sliding-window (513) + 14 full-attention layers, native 262K context.
+    # Hybrid KV amortization mirrors the metadata's layer pattern exactly.
+    reg.register(
+        _make(
+            key="flint",
+            matchers=_FLINT,
+            kv_estimator=_FLINT_KV,
+            hybrid=_FLINT_HYBRID,
         )
     )
 
@@ -523,17 +466,71 @@ def _build_registry() -> FamilyRegistry:
         _make(
             key="muse-glimmer",
             matchers=_MUSE,
-            capabilities=FamilyCapabilities(
-                supports_reasoning=True,
-                reasoning_template_key="reasoning_strength",
-                reasoning_use_preserve_flag=True,
-                supports_ngram_speculation=True,
-            ),
-            defaults=FamilyDefaults(
-                sampler=SamplerSettings(temperature=1.0, top_p=0.95, top_k=64),
-                context=ContextPolicy(small_ctx=16384, large_ctx=131072),
-            ),
             kv_estimator=_MUSE_KV,
+        )
+    )
+
+    # Spark-X2.5 (XHToken). Hybrid SWA/full-attention dense model, native 1M
+    # context, thinking on by default (enable_thinking, Qwen3-style). Official
+    # sampling: temp 1.0, top_p 0.95, top_k disabled (0 in llama.cpp).
+    # Total ctx covers n_parallel slots: 98304 = 32768 x 3.
+    reg.register(
+        _make(
+            key="spark",
+            matchers=_SPARK,
+            kv_estimator=_SPARK_KV,
+            hybrid=_SPARK_HYBRID,
+        )
+    )
+
+    # MiniCPM5 (OpenBMB). Dense 2B LlamaForCausalLM, native 128K context,
+    # deep-thinking SFT (enable_thinking). Official sampling lives in
+    # rama.yaml: temp 1.0, top_p 0.95, min_p 0.0 (llama.cpp's default
+    # min_p 0.05 causes repetitive output on this model).
+    reg.register(
+        _make(
+            key="minicpm5",
+            matchers=_MINICPM5,
+            kv_estimator=_MINICPM5_KV,
+        )
+    )
+
+    # Nanbeige4.2 (Nanbeige LLM Lab). Looped Transformer 3B, 256K context,
+    # thinking on by default (enable_thinking). Official chat/reasoning
+    # sampling (rama.yaml): temp 0.6, top_p 0.95, top_k 20; agentic
+    # workloads use temp 1.0.
+    reg.register(
+        _make(
+            key="nanbeige",
+            matchers=_NANBEIGE,
+            kv_estimator=_NANBEIGE_KV,
+        )
+    )
+
+    # NeoHorse-1 (TokenRhythm). Qwen3.5-4B post-trained for agentic
+    # harnesses; 256K native context, Qwen3 thinking template. Official
+    # eval sampling (rama.yaml): temp 1.0, top_p 0.95, top_k 20,
+    # min_p 0.0, presence_penalty 1.5.
+    reg.register(
+        _make(
+            key="neohorse",
+            matchers=_NEOHORSE,
+            kv_estimator=_NEOHORSE_KV,
+        )
+    )
+
+    # K2-Horizon (IFM). Sparse MoE with MoVA attention (MoVA-36B-A4B: 36B
+    # total, 4B active; also covers the dense K2-Horizon-32B). Native 512K
+    # context, thinking on by default at high reasoning effort. Official
+    # sampling (rama.yaml): temp 1.0, top_p 0.95. Requires llama.cpp with
+    # K2-Horizon arch support (MBZUAI-IFM fork, branch model/K2Horizon)
+    # until upstream merges it. Reuses the Qwen size bands for the KV
+    # fallback; exact GGUF metadata wins when readable.
+    reg.register(
+        _make(
+            key="k2-horizon",
+            matchers=_K2HORIZON,
+            kv_estimator=_QWEN_KV,
         )
     )
 
@@ -600,3 +597,35 @@ def kv_bytes_per_token(
         )
         return fam.kv_estimator.bytes_per_token(dummy, ctk, ctv)
     return 15000
+
+
+def hybrid_kv_ctx(
+    budget_bytes: int,
+    family_key: str,
+    metadata: dict[str, Any] | None,
+    ctk: str | None = None,
+    ctv: str | None = None,
+) -> int | None:
+    """Solve max context for a hybrid SWA/full-attention family.
+
+    Dense layers scale KV with ctx, but SWA layers saturate at the sliding
+    window, so bytes(ctx) = bpt_layer * (n_full*ctx + n_swa*min(ctx, window)).
+    Returns None when the family is not registered hybrid or the GGUF
+    metadata lacks a layer count (caller keeps the dense estimate).
+    """
+    fam = get_registry().get(family_key)
+    if fam is None or fam.hybrid is None or metadata is None:
+        return None
+    window, full_ratio = fam.hybrid
+    exact = kv_bytes_per_token_exact(metadata, ctk, ctv)
+    n_layers = get_block_count(metadata)
+    if exact is None or type(n_layers) is not int or n_layers < 1:
+        return None
+    ratio = min(max(full_ratio, 0.0), 1.0)
+    n_full = max(1, min(n_layers - 1 if n_layers > 1 else 1, int(n_layers * ratio + 0.5)))
+    n_swa = n_layers - n_full
+    bpt_layer = exact / n_layers
+    layer_tokens = budget_bytes / bpt_layer
+    if layer_tokens / n_layers < window:
+        return int(layer_tokens / n_layers)
+    return int((layer_tokens - n_swa * window) / n_full)

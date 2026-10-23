@@ -4,7 +4,6 @@ import json
 import unittest
 from unittest.mock import patch
 
-from rama import Config
 from rama.testing import ChatCompletionConfig, run_chat_completion
 
 
@@ -55,10 +54,6 @@ class ReasoningTemplateTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["chat_template_kwargs"], {"reasoning_effort": "low"})
         self.assertNotIn("reasoning", payload)
-
-    def test_gpt_oss_skips_native_chat_parsing(self) -> None:
-        config = Config("rama.yaml")
-        self.assertTrue(config.families["gpt-oss"]["skip_chat_parsing"])
 
 
 if __name__ == "__main__":

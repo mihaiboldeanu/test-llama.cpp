@@ -1,293 +1,662 @@
+# Rama config — single source of truth for launch arguments.
+#
+# `args:` blocks contain actual llama-server flags and values. They are merged
+# global -> family -> model -> CLI (later wins; null drops an inherited flag;
+# true emits a bare presence-flag). What the code still computes at runtime:
+#   - identity: -m <path>, --host, --port, --alias, env, pid handling
+#   - `auto` placeholders: --ctx-size (small_ctx/large_ctx via the 10 GB rule),
+#     --fit-ctx (= resolved ctx, unless a family opts MoE models out), and
+#     --reasoning on/off (family value, else big=on / small=off)
+#   - the MTP block when --mtp is passed (ctx ratio, batch caps, ngl override)
+#   - MoE models (detected from GGUF metadata) get --load-mode none unless
+#     --load-mode is set, and skip --fit-ctx in families with moe_fit_ctx_skip
+#
+# Paths, ports and build settings are structural; everything tunable lives here.
+
 model_dir: /mnt/FasterData/models
 llama_cpp_dir: ~/Projects/llama.cpp
 turbo_dir: ~/Projects/llama-cpp-turboquant
 cuda_root: /opt/cuda
-
 build_jobs: 8
-threads: 8
-threads_batch: 16
-
+template_dir: templates
 vram_total_gb: 24
 vram_headroom_gb: 2
-fit_target_mib: 1024
-batch_size: 4096
-ubatch_size: 2048
-
-temp: 1.0
-top_k: 64
-top_p: 0.95
-min_p: 0.05
-
-spec_type: ngram-mod
-spec_ngram_mod_size_n: 16
-spec_ngram_mod_n_min: 24
-spec_ngram_mod_n_max: 48
-draft_min: 8
-draft_max: 24
-
 default_port: 11435
 port_range_end: 11500
 
+rules:
+  small_ctx: 32768 # fallback for models below the threshold
+  large_ctx: 65536 # fallback for models at or above the threshold
+  small_threshold_gb: 10 # the size split used for ctx/reasoning/spec
+  mtp_ngl_threshold_gb: 20 # MTP: models below this run entirely on GPU
+  mtp_ctx_ratio: 0.8 # MTP: fraction of ctx left for the draft
+
+args:
+  -np: 1
+  --ctx-size: auto
+  -ctk: q8_0
+  -ctv: q8_0
+  --flash-attn: on
+  -b: 4096
+  -ub: 2048
+  --threads: 8
+  --threads-batch: 16
+  --temp: 1.0
+  --top-k: 64
+  --top-p: 0.95
+  --min-p: 0.05
+  --repeat-penalty: 1.0
+  --presence-penalty: 0.0
+  --perf: true
+  --kv-unified: true
+  --no-context-shift: true
+  --fit: on
+  --fit-target: 1024
+  --fit-ctx: auto
+  -n: 32768
+  --reasoning: auto
+
 families:
   qwen:
+    # Qwen3.6 keeps the legacy thinking cap: --reasoning-budget with the
+    # "thought enough" cutoff message. Every other family runs uncapped
+    # (or effort-based) since the injected message can loop some models.
     small_ctx: 24576
     large_ctx: 151552
-    temp: 0.7
-    top_k: 20
-    top_p: 0.8
-    min_p: 0.0
-    repeat_penalty: 1.0
-    presence_penalty: 1.5
+    args:
+      --reasoning-budget: 1024
+      --reasoning-budget-message: "I have thought enough, let's move to answering."
+      --chat-template-kwargs: '{"preserve_thinking": true}'
+      --temp: 0.7
+      --top-k: 20
+      --top-p: 0.8
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 1.5
+
+  qwen3.8-flash-next:
+    # Qwen3.8-Flash-Next is the first open-weight Qwen4-architecture preview.
+    # Its N-gram/PLE tables load well from mmap, so keep the model mapped and
+    # let the large embedding tensors be read lazily.
+    # Shared external MTP head (the IQ4_XS/IQ3_XXS shards have no embedded
+    # nextn tensors). Sidecar auto-discovery does not find it, so pass it
+    # explicitly via --model-draft whenever --mtp is used.
+    small_ctx: 24576
+    large_ctx: 170240
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      --reasoning-effort: xhigh
+      --load-mode: mmap
+      --lazy-mode: on
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+    mtp:
+      draft_model: mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf
+      ngl: 999
+      n_max: 2
 
   qwen3.8:
-    # Qwen3.8 thinks by default.  These are its official thinking-mode
+    # Qwen3.8 thinks by default. These are its official thinking-mode
     # sampling parameters; keep its context policy aligned with Qwen.
-    default_reasoning: true
-    small_ctx: 24576
-    large_ctx: 151552
     # q8 KV leaves enough VRAM headroom near the full configured context;
     # keep a small 5% trim so the MTP draft KV cache has breathing room.
-    mtp_ctx_ratio: 0.95
-    temp: 1.0
-    top_k: 20
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
-    presence_penalty: 0.0
-
-  qwen-coder:
-    default_reasoning: false
     small_ctx: 24576
-    large_ctx: 151552
-    temp: 0.7
-    top_k: 20
-    top_p: 0.8
-    min_p: 0.0
-    repeat_penalty: 1.05
-
-  grug:
-    # Grug-27B is a Qwen3.6-27B derivative with compact native reasoning.
-    # Keep Qwen's reasoning-template path and its code-oriented sampler.
-    default_reasoning: true
-    small_ctx: 24576
-    large_ctx: 151552
-    temp: 0.7
-    top_k: 20
-    top_p: 0.8
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  gpt-oss:
-    reasoning_template_key: reasoning_effort
-    reasoning_enabled_value: high
-    reasoning_disabled_value: low
-    # llama.cpp's native PEG parser rejects some valid gpt-oss channel labels
-    # (for example, "final code"). Return raw content and let Rama extract it.
-    skip_chat_parsing: true
-    default_reasoning: true
-    small_ctx: 24576
-    large_ctx: 131072
-    temp: 1.0
-    top_k: 0
-    top_p: 1.0
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  lfm:
-    # LFM2-24B-A2B is an instruct-only hybrid MoE (no reasoning traces).
-    default_reasoning: false
-    small_ctx: 24576
-    large_ctx: 32768
-    temp: 0.1
-    top_k: 50
-    top_p: 1.0
-    min_p: 0.0
-    repeat_penalty: 1.05
-
-  ling:
-    # Ling-mini-2.0's native context is 32K; 128K needs a YaRN conversion.
-    default_reasoning: false
-    small_ctx: 24576
-    large_ctx: 32768
-    temp: 0.7
-    top_k: 0
-    top_p: 0.8
-    min_p: 0.0
-    repeat_penalty: 1.05
+    large_ctx: 171552
+    args:
+      --reasoning: on
+      --reasoning-effort: xhigh
+      --chat-template-kwargs: '{"preserve_thinking": true}'
+      --no-mmproj: true
+      --no-context-shift: null # qwen3.8 runs with context shift on
+      --kv-unified: null
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+    mtp:
+      ctx_ratio: 0.90
+      n_max: 4
+      p_min: 0
+    env:
+      GGML_CUDA_GRAPH_OPT: "1"
 
   gemma:
     # Gemma GGUFs now embed the corrected native template; do not override it.
-    # chat_template_file: gemma4.jinja
     small_ctx: 24576
     large_ctx: 131072
-    temp: 1.0
-    top_k: 64
-    top_p: 0.95
-    min_p: 0.05
+    moe_fit_ctx_skip: true
+    args:
+      --temp: 1.0
+      --top-k: 64
+      --top-p: 0.95
+      --min-p: 0.05
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  humanizer:
+    # jialinyyzz humanizer-12B (gemma-4-12B finetune): rewrites AI drafts to
+    # read human. Card settings: temp 1.0 / top-p 0.95 and nothing else
+    # (top-k 0, min-p 0, repeat 1.0); keep instruction + draft + rewrite
+    # within 8192 tokens; plain completion, no thinking channel.
+    small_ctx: 8192
+    large_ctx: 8192
+    args:
+      --reasoning: off
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
 
   bonsai:
     small_ctx: 24576
     large_ctx: 32768
-    temp: 0.7
-    top_k: 20
-    top_p: 0.95
-    min_p: 0.0
-
-  bonsai-27:
-    # 1-bit and ternary Bonsai 27B are Qwen3.5 hybrid-attention models.
-    default_reasoning: true
-    # These GGUFs are compact despite being 27B, so do not classify them by
-    # file size as a small-context model.
-    small_ctx: 262144
-    large_ctx: 262144
-    temp: 0.7
-    top_k: 20
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  devstral:
-    chat_template_file: devstral-fix.jinja
-    small_ctx: 24576
-    large_ctx: 81920
-    temp: 0.15
-    top_k: 40
-    top_p: 0.9
-    min_p: 0.05
-
-  mistral-small:
-    chat_template_file: mistral_small_tool_call.jinja
-    small_ctx: 24576
-    large_ctx: 81920
-    temp: 0.15
-    top_k: 40
-    top_p: 0.9
-    min_p: 0.05
-
-  glm:
-    default_reasoning: true
-    small_ctx: 32768
-    large_ctx: 202752
-    temp: 0.7
-    top_k: 0
-    top_p: 1.0
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  nex-n2:
-    # Nex-N2-mini is post-trained on Qwen3.5-35B-A3B-Base, with its own
-    # agentic-thinking template and official sampling profile.
-    default_reasoning: true
-    small_ctx: 32768
-    large_ctx: 262144
-    temp: 0.7
-    top_k: 40
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  nemotron:
-    small_ctx: 24576
-    large_ctx: 65536
-    temp: 1.0
-    top_k: 40
-    top_p: 0.95
-    min_p: 0.05
-
-  phi4:
-    small_ctx: 24576
-    large_ctx: 65536
-    temp: 0.8
-    top_k: 50
-    top_p: 0.95
-    min_p: 0.0
+    args:
+      --temp: 0.7
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
 
   granite:
     small_ctx: 32768
     large_ctx: 65536
-    temp: 1.0
-    top_k: 64
-    top_p: 0.95
-    min_p: 0.05
-
-  ornith:
-    small_ctx: 24576
-    large_ctx: 151552
-    temp: 0.7
-    top_k: 20
-    top_p: 0.8
-    min_p: 0.0
-    repeat_penalty: 1.0
-    presence_penalty: 1.5
 
   laguna:
     # Laguna S 2.1 supports 1M tokens, but 128K is the proven local setting
     # for IQ4_XS with q8/q8 KV cache. Preserve native thinking by default.
-    default_reasoning: true
     small_ctx: 32768
     large_ctx: 131072
-    temp: 1.0
-    top_k: 20
-    top_p: 1.0
-    min_p: 0.0
-    repeat_penalty: 1.0
-
-  north-code:
-    reasoning_template_key: reasoning
-    small_ctx: 24576
-    large_ctx: 151552
-    temp: 1.0
-    top_k: 0
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      --load-mode: none
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 1.0
+      --min-p: 0.0
+      --repeat-penalty: 1.0
 
   mellum:
     small_ctx: 24576
     large_ctx: 131072
-    temp: 0.6
-    top_k: 20
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      --load-mode: none
+      --temp: 0.6
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+
+  flint:
+    # Recursive Flint (39.8B total / ~2.5B active coding-agent MoE): 2 dense
+    # + 47 MoE layers, 256 routed experts (6 active) + shared experts, and
+    # hybrid attention (35 sliding-window layers at 513 tokens + 14 full
+    # layers). Native context is 262144; official sampling is temp 1.0 /
+    # top_p 0.95 / top_k 20 with an output budget of at least 32768 tokens
+    # including reasoning. The embedded template is required for tool calls
+    # and <think> parsing, and history must keep reasoning_content.
+    small_ctx: 65536
+    large_ctx: 262144
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      --jinja: true
+      --load-mode: mmap
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  ornith:
+    small_ctx: 24576
+    large_ctx: 151552
+    reasoning_preserve: true
+    args:
+      --load-mode: none
+      --temp: 0.7
+      --top-k: 20
+      --top-p: 0.8
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 1.5
+
+  spark:
+    # Spark-X2.5-4B/1.7B (XHToken): hybrid SWA + full-attention dense models
+    # with a native 1M context. Official sampling is temp 1.0 / top_p 0.95 /
+    # top_k disabled (0 in llama.cpp), thinking on by default.
+    # Slots: --ctx-size is the TOTAL context shared by all parallel slots, so
+    # 98304 total with n_parallel 3 gives 32768 tokens per chat. --kv-unified
+    # pools the slots into one shared KV cache.
+    small_ctx: 98304
+    large_ctx: 98304
+    args:
+      -np: 3
+      --reasoning: on
+      --chat-template-kwargs: '{"preserve_thinking": true}'
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  minicpm5:
+    # MiniCPM5-2B (OpenBMB): dense 2B, native 128K context, deep-thinking
+    # SFT. Official sampling: temp 1.0 / top_p 0.95 / min_p 0.0 -
+    # llama.cpp's default min_p 0.05 causes repetitive output.
+    small_ctx: 32768
+    large_ctx: 131072
+    args:
+      --reasoning: on
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+
+  nanbeige:
+    # Nanbeige4.2-3B: Looped Transformer, 256K context, thinking on by
+    # default. Official chat/reasoning sampling: temp 0.6 / top_p 0.95 /
+    # top_k 20; use temp 1.0 for agentic tool-use workloads.
+    small_ctx: 32768
+    large_ctx: 131072
+    args:
+      --reasoning: on
+      --temp: 0.6
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+
+  ling:
+    # Ling-3.0-flash (inclusionAI): hybrid-linear MoE - 35 KDA layers + 7
+    # gated MLA (5:1), 512 routed experts with 8 active + 1 shared, 124B
+    # total / 5.1B active. Official sampling: temp 0.6 / top_p 0.95 /
+    # top_k 20 (the Ling-3.0-tiny sibling uses temp 1.0 instead). Thinking
+    # is enabled by default in the chat template and disabled per request
+    # via chat_template_kwargs, not a server toggle. Native 256K context -
+    # the card runs SWE-bench at the full window; 128K is the safe local
+    # cap for Q3/Q4 quants spanning RAM. Bump large_ctx to 262144 only with
+    # RAM headroom: the hybrid-linear KV cache is tiny, so the ceiling is
+    # host memory, not KV bytes. Official GGUFs
+    # (inclusionAI/Ling-3.0-flash-GGUF); needs llama.cpp with bailingmoe3
+    # arch support (b11571+). The GGUFs ship the trained-in nextn/MTP head
+    # (blk.42) but llama.cpp ignores it as unused tensors (no Ling MTP
+    # support merged yet), so --mtp stays off until a PR lands.
+    # RAM offload: left alone, the MoE auto-rule emits --load-mode none,
+    # which materializes the whole model (64GB IQ4_XS) in anonymous host
+    # RAM before the offload split -> OOM killer at startup (exit -9 on
+    # the 64GB box). mmap keeps the shards mapped: only CPU-resident layer
+    # bytes + KV get touched, host experts page through the mapping.
+    small_ctx: 65536
+    large_ctx: 131072
+    args:
+      --reasoning: on
+      --jinja: true
+      --load-mode: mmap
+      --temp: 0.6
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  neohorse:
+    # NeoHorse-1-4B (TokenRhythm): Qwen3.5-4B agentic post-training, 256K
+    # native context, Qwen3 thinking template. Official eval sampling:
+    # temp 1.0 / top_p 0.95 / top_k 20 / min_p 0.0 / presence 1.5.
+    small_ctx: 32768
+    large_ctx: 131072
+    args:
+      --reasoning: on
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 1.5
+
+  k2-horizon:
+    # K2-Horizon (IFM): sparse MoE with MoVA attention (MoVA-36B-A4B is
+    # 36B total / 4B active; also covers the dense K2-Horizon-32B).
+    # Native 512K context, thinking on by default at high effort.
+    # Official sampling: temp 1.0 / top_p 0.95. IFM evaluates GGUFs at
+    # 64K; 128K is the safe local setting for Q4_K_M with q8 KV on 24GB.
+    # REQUIRES llama.cpp with K2-Horizon arch support (MBZUAI-IFM fork,
+    # branch model/K2Horizon) until upstream merges it - vanilla builds
+    # fail with "unknown model architecture: 'k2-horizon'".
+    small_ctx: 32768
+    large_ctx: 131072
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      --chat-template-kwargs: '{"reasoning_effort": "high"}'
+      --temp: 1.0
+      --top-k: 20
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  phi4:
+    small_ctx: 24576
+    large_ctx: 65536
+    args:
+      --temp: 0.8
+      --top-k: 50
+      --top-p: 0.95
+      --min-p: 0.0
 
   muse-glimmer:
     small_ctx: 16384
     large_ctx: 131072
-    temp: 1.0
-    top_k: 64
-    top_p: 0.95
-    min_p: 0.0
-    repeat_penalty: 1.0
-    default_reasoning: true
-    reasoning_template_key: reasoning_strength
-    reasoning_enabled_value: high
-    reasoning_disabled_value: low
-    # KV cache uses f16 for best quality. The context auto-calculator accounts
-    # for its higher VRAM use before launching.
-    ctk: f16
-    ctv: f16
+    reasoning_preserve: true
+    args:
+      --reasoning: on
+      # Meta's doc: required for the embedded control-token template; without
+      # it tool calling and reasoning separation break.
+      --jinja: true
+      --temp: 1.0
+      --top-k: 64
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  nemotron:
+    small_ctx: 24576
+    large_ctx: 65536
+    args:
+      --temp: 1.0
+      --top-k: 40
+      --top-p: 0.95
+      --min-p: 0.05
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
 
 models:
+  flint-Q8_0:
+    # 42.3GB Q8_0 on a 24GB 4090 + 61GB RAM: mmap the shards (never
+    # --load-mode none, which would anonymously allocate all 42GB), and pin
+    # the dense / attention / shared stack with -ngl 99. MoE cache disabled
+    # for now: its ~6GB buys 7 more expert blocks on the GPU instead.
+    # --n-cpu-moe 32 keeps the first 32 blocks' routed experts on the host
+    # and leaves 17 MoE blocks on the GPU (~14.6GB of experts). With the
+    # ~3.8GB hybrid KV at 262144 (35 SWA-513 + 14 full-attention layers)
+    # the server lands around 21.7GB, leaving ~2.7GB headroom on the 4090.
+    # --fit must stay off: it aborts once --n-cpu-moe installs overrides.
+    args:
+      -ngl: 99
+      --fit: off
+      --load-mode: mmap
+      --n-cpu-moe: 32
+
+  NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q5_K_XL:
+    # Native context is 1M. Its hybrid Mamba/MoE design has only a few
+    # attention layers, so q8 KV stays practical even at the full window.
+    # Capped at 512K locally: halves the KV allocation vs 1M so --fit keeps
+    # more layers on GPU and decode is faster. Bump back to 1048576 if you
+    # need the full window.
+    # Fit-managed offload: the -ngl 99 pin is dropped because --fit aborts
+    # when ngl is user-set ("n_gpu_layers already set by user, abort") and
+    # the fully-pinned 28 GB model + huge ctx + ~5 GB compute buffers OOMs
+    # this 24 GB GPU. --n-cpu-moe 28 stays as the host-expert floor the MoE
+    # cache feeds on. -b 2048 / -ub 1024 halves the compute-buffer reserve
+    # that OOMed (same pattern as the Qwen3.8-Flash-Next IQ4_XS entry).
+    args:
+      -b: 4096
+      -ub: 2048
+      --ctx-size: 524288
+      --load-mode: mmap
+      #-ngl: 99
+      --n-cpu-moe: 24
+      --reasoning: on
+      --jinja: true
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+    mtp:
+      batch_size: 4096
+      ubatch_size: 2048
+
+  NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-Q4_K_M:
+    # BLOCKED 2026-10-14: the local file (RemySkye pre-merge quant, 90 blocks
+    # incl. the 2-sub-block MTP head) is rejected by mainline llama.cpp, which
+    # merged PR #25444 slimmed-down (trunk-only: exactly 88 blocks, MTP head
+    # dropped, follow-up MTP PR still pending). Fails with "layer 88 declares
+    # neither expert_feed_forward_length nor expert_used_count". Needs a
+    # trunk-only (88-block, no nextn tensors) GGUF, or a fork build with the
+    # full pre-merge branch. See ggml-org/llama.cpp#28345.
+    # NVIDIA validates this model through 1M tokens (the HF config defaults
+    # to 256K only because full-precision deployments need more VRAM). Its
+    # 90-layer hybrid MoE needs a heavier CPU expert split on this 24 GB GPU.
+    args:
+      --ctx-size: 1048576
+      --load-mode: mmap # must remain mapped; --load-mode none makes llama.cpp allocate
+      -ngl: 99
+      --n-cpu-moe: 64
+      --moe-cache-mib: 1024
+      --reasoning: on
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB:
+    # Full-native-context launch (256K), v2 after the first 262144 OOM.
+    # Crash-log truth: global --fit ABORTS the moment --n-cpu-moe sets
+    # tensor overrides ("tensor_buft_overrides already set by user,
+    # abort"), so "fit spills more experts on top" was a fantasy - the
+    # deterministic floor has to carry the whole plan. Measured there:
+    # everything pinned + 256K KV + the ~1.7 GB prompt-compute reserve
+    # blows the 4090 (cudaMalloc OOM on the pp buffer) - the 256K hybrid
+    # KV alone is worth several GB. So: --fit: off skips the abort dance
+    # entirely; --n-cpu-moe 12 keeps ~13.4 GB of experts on host, leaving
+    # GPU ~7 GB weights + KV + buffers (~19 GB, headroom for graphs);
+    # -b 2048 halves the prompt-compute reserve (Flash-Next IQ4_XS
+    # lesson) without giving up the 3800 t/s pp this quant showed.
+    # Sampling stays official Bolt (temp 1.0 / top-k 0 / top-p 0.95 /
+    # min-p 0.0 - inherited top-k 40 / min-p 0.05 would truncate).
+    reasoning_preserve: true
+    args:
+      --ctx-size: 262144
+      --fit: off
+      -b: 2048
+      --n-cpu-moe: 12
+      --load-mode: mmap
+      --reasoning: on
+      --jinja: true
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+
+  NVIDIA-Nemotron-3.5-Bolt-74B-A9B-UD-Q4_K_XL:
+    # Bolt 74B-A9B (NVIDIA, Oct 15): nemotron_h_moe arch, Mamba-2 +
+    # attention hybrid with 9B active experts, compressed from Nemotron
+    # 3.5 Super VL for local agents. Official sampling: temp 1.0 /
+    # top_p 0.95 / repeat 1.0, no top-k - pin top-k 0 / min-p 0.0 to match
+    # the Lightning/Puzzle/Cascade siblings (no extra truncation at temp
+    # 1.0). Think on by default; optional medium effort stays off.
+    # Native context 256K; capped at 128K locally so --fit gets more
+    # layers on the 24 GB GPU (bump to 262144 if RAM headroom allows).
+    # Keep mmap: same hybrid pattern as Lightning, the n-gram/state tables
+    # load lazily from the mapped file. (The server hints "consider
+    # --load-mode none with tensor overrides" - rejected: load-mode none
+    # would pre-allocate all ~50 GB anonymously, the same trap that
+    # OOM-killed Ling's first run on a 64 GB box.) Expert split, measured
+    # off the GGUF shards: 40 MoE layers avg ~1.12 GB each (~44.9 GB
+    # expert bytes, only ~5.4 GB non-expert) - --n-cpu-moe 28 pins the top
+    # 28 (~34 GB) to the host, keeping the bottom ~12 (~10.4 GB) plus the
+    # entire attention/mamba stack on GPU with headroom for KV at 131072.
+    # No --moe-cache-mib: the 1024 MiB budget can't hold even one 1.1 GB
+    # expert layer (server: "MoE cache budget is too small for 1 layers,
+    # they are not cached") - re-add a big cache instead if decode wants
+    # it later. reasoning_preserve on: this template supports preserving
+    # reasoning (server enables it by default) - set explicitly so the
+    # launch line states what runs. NVIDIA pairs the main GGUF with a
+    # DFlash speculative draft (1.11B, draft_num_predict 7) - the pairing
+    # below stays commented until that draft GGUF is downloaded (see the
+    # Muse-Glimmer entry for the live pattern).
+    reasoning_preserve: true
+    args:
+      --ctx-size: 131072
+      --load-mode: mmap
+      --n-cpu-moe: 28
+      --reasoning: on
+      --jinja: true
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+    # DFlash speculative draft (download NVIDIA's dflash Bell GGUF first):
+    #   args:
+    #     --model-draft: dflash-nemotron-bolt
+    #     --spec-type: draft-dflash
+    #     --spec-draft-n-max: 7
+    #     --spec-draft-n-min: 0
+
+  Mellum2.1-12B-A2.5B-Thinking-Q8_0:
+    # First-run diagnosis (2026-10-17): served at ~6 t/s (~suspiciously
+    # CPU-bound for a 12B-A2.5B MoE) and OpenCode saw only the thinking
+    # channel - the --fit auto-offload never pinned this GGUF (no fit/ngl
+    # decision lines in the server log). The 12.9GB file + 131072 ctx q8 KV
+    # fits the 24GB GPU outright, so pin the whole model with -ngl 99 and
+    # take fit out of the loop ("--fit aborts when ngl is user-set"; -fit
+    # off skips that dance deterministically). Mellum2.1's embedded
+    # template does NOT support reasoning preservation (server warned at
+    # load), so the family's reasoning_preserve flag is dropped here.
+    # --jinja switches chat handling to the embedded template: Mellum's
+    # tool calling (hermes-style) and the thinking-block =>
+    # answer separation OpenCode expects both go through the template.
+    reasoning_preserve: false
+    args:
+      -ngl: 99
+      --fit: off
+      --jinja: true
+
+  Ling-3.0-flash-IQ4_XS:
+    # Rig's usual big-MoE recipe (matching the Flash-Next/Lightning setup):
+    # --n-cpu-moe 35 pins ALL routed experts to the host -- the routed-expert
+    # tensors live only in the 35 KDA layers (7 MLA + shared expert +
+    # attention stay GPU-side, placed by fit), which sidesteps the MoE
+    # auto-rule ever spilling --load-mode none again (those default
+    # allocations OOM'd the first run, exit -9; family-level mmap keeps the
+    # ~60GB expert shards mapped, paged instead of pre-allocated). The
+    # pinned host experts are what the MoE cache feeds on: 6024 MiB ~ 10%
+    # of expert bytes, measured 1.57x tg on same-class Flash-Next IQ4_XS.
+    # -b 2048 shrinks the compute reserve at 131072 ctx. Load-log noise:
+    # special_eos/eog id mismatch in the tokenizer config (harmless) and
+    # unused blk.42 nextn tensors (MTP not merged yet).
+    args:
+      -b: 2048
+      --n-cpu-moe: 32
+
+  Qwen3.8-Flash-Next-UD-IQ3_XXS:
+    # Rig-specific offload split for the IQ3_XXS shards: keep the first 36
+    # MoE layers on CPU, then load as many remaining layers as VRAM allows.
+    args:
+      -ngl: 99
+      --n-cpu-moe: 36
+      --moe-cache-mib: 1024
+      --threads-batch: 12
+
+  Qwen3.8-Flash-Next-UD-IQ4_XS:
+    # Fit-managed launch: the 1024 MiB MoE cache OOMs the old --fit off
+    # hand-tune at 170K ctx. --fit (target 1024) needs a free hand, so the
+    # -ngl 99 pin is dropped (fit aborts when ngl is user-set); --n-cpu-moe
+    # 38 stays as the host-expert floor the cache feeds on. -ub 1024 halves
+    # the ~3 GB compute-buffer reserve that OOMed, ctx 150K.
+    args:
+      -b: 2048
+      -ub: 2048
+      --ctx-size: 150000
+      --fit: on
+      --fit-ctx: 150000
+      --fit-target: 1024
+      #-ngl: 99
+      #--n-cpu-moe: 38
+      --moe-cache-mib: 6024
+
+  Qwen3.8-Flash-Next-Uncensored-IQ4_XS:
+    # Mirror the live UD IQ4_XS fit-managed launch: same 150K ctx, fit on with
+    # the 1024 MiB target, -ub 2048 to halve the compute-buffer reserve, and
+    # the 6 GiB MoE expert cache. Keep the ngl pin dropped (fit aborts when
+    # ngl is user-set).
+    args:
+      -b: 2048
+      -ub: 2048
+      --ctx-size: 150000
+      --fit: on
+      --fit-ctx: 150000
+      --fit-target: 1024
+      --moe-cache-mib: 6024
+
+
+  Qwen3.8-27B-UD-Q4_K_M:
+    # Live 4090 MTP setup: keep q8 KV, allow context shift, drop the fixed
+    # --kv-unified/no-p-min flags, and use CUDA graphs with 4 MTP draft tokens.
+    mtp:
+      batch_size: 2048
+      ubatch_size: 512
+
   Muse-Glimmer-30B-UD-Q4_K_XL:
     # llama.cpp resolves this by name to dflash-kquant-muse.gguf. DFlash is a
-    # target-specific block-diffusion draft, so retain this pairing.
-    draft_model: dflash
-    spec_type: draft-dflash
-    draft_max: 15
-    draft_min: 0
+    # target-specific block-diffusion draft, so retain this pairing. n-max 4:
+    # measured draft acceptance is ~15%, so wide proposals waste compute.
+    args:
+      --model-draft: dflash-kquant-muse
+      --spec-type: draft-dflash
+      --spec-draft-n-max: 4
+      --spec-draft-n-min: 0
+      --chat-template-kwargs: '{"reasoning_strength": "xhigh"}'
 
-  Laguna-S-2.1-UD-IQ4_XS:
-    # Keep the first 33 of Laguna's 48 expert layers on CPU and offload the
-    # final 15 plus all dense layers to VRAM. This targets ~22 GB VRAM without
-    # crowding f16 KV/cache and CUDA work buffers. mmap is essential here:
-    # this 54 GiB GGUF cannot be fully resident alongside a normal desktop.
-    n_cpu_moe: 34
-    n_gpu_layers: 99
-    fit: false
-    fit_ctx: false
-    no_mmap: false
-    # Conservative prefill buffers prevent a large temporary RAM/VRAM spike.
-    batch_size: 256
-    ubatch_size: 128
-    preferred_ctx: 131072
+  # --- MoE expert cache (--moe-cache-mib, #29887 + #30112) ---
+  # Requires host-resident experts (--n-cpu-moe/--cpu-moe or --fit spill).
+  # --fit counts the cache, so --fit-target 1024 headroom still holds.
+  # 1024 MiB is a safe starter; upstream finds ~10% of expert bytes ideal
+  # (Flash-Next Q4_0: 6544 MiB → 1.57x tg on 4090). Bump per-model if
+  # hit-rate (server log at -lv 4) is low and VRAM allows.
+  Laguna-XS-2.1-Q6_K_L:
+    args:
+      --moe-cache-mib: 1024
+
+  NVIDIA-Nemotron-Cascade-2-30B-A3B-Q5_K_M:
+    # Official sampling is temp 1.0 / top_p 0.95 only; pin top-k 0 / min-p 0.0
+    # to match the Lightning/Puzzle siblings (no extra truncation at temp 1.0).
+    args:
+      --moe-cache-mib: 1024
+      --temp: 1.0
+      --top-k: 0
+      --top-p: 0.95
+      --min-p: 0.0
+      --repeat-penalty: 1.0
+      --presence-penalty: 0.0
+
+  gemma-4-26B-A4B-it-UD-Q8_K_XL:
+    args:
+      --moe-cache-mib: 1024
+
+  Qwen3.6-35B-A3B-UD-Q6_K_XL:
+    args:
+      --moe-cache-mib: 1024
+

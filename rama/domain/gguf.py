@@ -291,15 +291,7 @@ def get_expert_count(metadata: dict[str, Any], arch: str | None = None) -> int |
     return None
 
 
-def get_expert_used_count(
-    metadata: dict[str, Any], arch: str | None = None
-) -> int | None:
-    """Get number of active experts per token (MoE)."""
-    if arch is None:
-        arch = get_architecture(metadata)
-    if arch:
-        return metadata.get(f"{arch}.expert_used_count")
-    return None
+
 
 
 def is_moe_from_metadata(metadata: dict[str, Any]) -> bool:

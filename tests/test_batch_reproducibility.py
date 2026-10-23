@@ -34,15 +34,24 @@ from rama.domain.batch_runner import (
     can_resume,
     load_manifest,
 )
-from rama.domain.models import (
-    ContextPolicy,
-    FamilyCapabilities,
-    LaunchSettings,
-    MemorySettings,
-    ModelInfo,
-    ResolvedModelProfile,
-    SamplerSettings,
-)
+from rama.domain.models import ModelInfo, ResolvedProfile
+
+
+def _resolved_profile(
+    model: ModelInfo, temperature: float = 0.6, seed: int = 42
+) -> ResolvedProfile:
+    args = {"--temp": temperature, "--ctx-size": 4096, "-s": seed}
+    return ResolvedProfile(
+        model=model,
+        args=args,
+        ctx=4096,
+        fit_ctx=4096,
+        reasoning=False,
+        mtp={"enabled": False},
+        env={},
+        alias=model.name,
+        provenance={},
+    )
 
 
 class TestComputeFixtureHash:
@@ -73,7 +82,7 @@ class TestComputeRunIdentity:
     """Run identity is deterministic and content-based."""
 
     def _item(
-        self, model_name: str = "model1", backend: str = "llama.cpp"
+        self, model_name: str = "model1", backend: str = "llama.cpp", seed: int = 42
     ) -> BatchItemPlan:
         model = ModelInfo(
             name=model_name,
@@ -81,28 +90,11 @@ class TestComputeRunIdentity:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model, seed=seed)
         return BatchItemPlan(
             model=model,
             profile=profile,
             backend=backend,
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
 
@@ -127,10 +119,7 @@ class TestComputeRunIdentity:
 
     def test_different_seed(self) -> None:
         item1 = self._item()
-        item2 = self._item()
-        item2 = BatchItemPlan(
-            **{**item2.__dict__, "seed": 99}
-        )
+        item2 = self._item(seed=99)
         id1 = compute_run_identity("code", [item1], {})
         id2 = compute_run_identity("code", [item2], {})
         assert id1 != id2
@@ -159,14 +148,7 @@ class TestHashProfile:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(temperature=0.7),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model, temperature=0.7)
         h = hash_profile(profile)
         assert h["model"]["name"] == "test-model"
 
@@ -177,16 +159,10 @@ class TestHashProfile:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(temperature=0.7, top_p=0.9),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model, temperature=0.7)
+        profile.args["--top-p"] = 0.9
         h = hash_profile(profile)
-        assert h["sampler"]["temperature"] == 0.7
+        assert h["args"]["--temp"] == 0.7
 
     def test_json_serializable(self) -> None:
         model = ModelInfo(
@@ -195,14 +171,7 @@ class TestHashProfile:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         h = hash_profile(profile)
         # Should not raise
         json.dumps(h)
@@ -251,7 +220,7 @@ class TestPlanBatch:
         )
         plan = plan_batch(inp)
         assert len(plan.items) == 1
-        assert plan.items[0].seed == 99
+        assert plan.items[0].profile.args["-s"] == 99
 
     def test_profile_uses_the_full_override_chain(self) -> None:
         """Batch profiles must agree with the launch resolver's precedence."""
@@ -273,9 +242,9 @@ class TestPlanBatch:
 
         plan = plan_batch(inp)
 
-        assert plan.items[0].profile.sampler.temperature == 0.9
+        assert plan.items[0].profile.args["--temp"] == 0.9
         assert (
-            plan.items[0].profile.provenance["sampler.temperature"]
+            plan.items[0].profile.provenance["args.--temp"]
             == "batch override"
         )
 
@@ -322,28 +291,11 @@ class TestManifestPersistence:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         item = BatchItemPlan(
             model=model,
             profile=profile,
             backend="llama.cpp",
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
         plan = BatchPlan(
@@ -383,28 +335,11 @@ class TestManifestPersistence:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         item = BatchItemPlan(
             model=model,
             profile=profile,
             backend="llama.cpp",
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
 
@@ -446,28 +381,11 @@ class TestCanResume:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         item = BatchItemPlan(
             model=model,
             profile=profile,
             backend="llama.cpp",
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
         plan = BatchPlan(
@@ -491,28 +409,11 @@ class TestCanResume:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         item = BatchItemPlan(
             model=model,
             profile=profile,
             backend="llama.cpp",
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
         plan = BatchPlan(
@@ -535,28 +436,11 @@ class TestBatchExecutorResult:
             size_bytes=4_000_000_000,
             family_key="llama",
         )
-        profile = ResolvedModelProfile(
-            model=model,
-            context=ContextPolicy(),
-            sampler=SamplerSettings(),
-            memory=MemorySettings(),
-            launch=LaunchSettings(),
-            capabilities=FamilyCapabilities(),
-        )
+        profile = _resolved_profile(model)
         item = BatchItemPlan(
             model=model,
             profile=profile,
             backend="llama.cpp",
-            ctk="q8_0",
-            ctv="q8_0",
-            ctx_size=4096,
-            seed=42,
-            mtp_enabled=False,
-            mtp_n_max=3,
-            mtp_n_min=0,
-            reasoning=None,
-            reasoning_budget=1024,
-            max_tokens=None,
             config_item={},
         )
         result = BatchExecutorResult(

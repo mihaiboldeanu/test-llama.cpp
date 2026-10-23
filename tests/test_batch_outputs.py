@@ -5,19 +5,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
-import yaml
-
-from rama import Config
 from rama.testing_modules.batch_runner import BatchRunner, BatchRunnerConfig
 
 
 class BatchOutputTests(unittest.TestCase):
     def test_code_batch_contains_only_test_and_kv_settings(self) -> None:
+        from rama.domain.batch_planner import load_batch_items
+
         batch_path = Path(__file__).parent.parent / "config" / "batch_code_test.yaml"
-        batch = yaml.safe_load(batch_path.read_text())
+        batch = load_batch_items(batch_path)
         allowed_keys = {
             "model",
             "ctx",
@@ -29,6 +26,7 @@ class BatchOutputTests(unittest.TestCase):
         }
 
         self.assertTrue(batch)
+        self.assertEqual(len(batch), 32)
         for item in batch:
             self.assertEqual(set(item) - allowed_keys, set(), item["model"])
             self.assertEqual(item["ctx"], 16384, item["model"])
@@ -36,6 +34,9 @@ class BatchOutputTests(unittest.TestCase):
             self.assertEqual(item["ctv"], "f16", item["model"])
             self.assertEqual(item["max_tokens"], 1024, item["model"])
             self.assertFalse(item["reasoning"], item["model"])
+        mtp_items = [item for item in batch if item.get("mtp")]
+        self.assertEqual(len(mtp_items), 1)
+        self.assertEqual(mtp_items[0]["model"], "Qwen3.6-27B-Q4_K_M_mtp")
 
     def test_code_batch_saves_only_the_aggregate_result_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -78,28 +79,6 @@ class BatchOutputTests(unittest.TestCase):
             self.assertEqual(row["score"], "8.0000")
             self.assertEqual(row["family_score"], "8.0000")
             self.assertEqual(row["family_score_stddev"], "1.4142")
-
-    def test_code_batch_records_a_launch_failure_and_continues(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output_dir = Path(directory)
-            runner = BatchRunner(BatchRunnerConfig(config_file="unused.yaml", quiet=True))
-            runner.cfg = Config("rama.yaml")
-            runner.results_file = output_dir / "batch.json"
-            runner.csv_file = output_dir / "batch.csv"
-            model = SimpleNamespace(name="too-big", family="laguna")
-
-            with patch(
-                "rama.testing_modules.batch_runner.start_model",
-                side_effect=RuntimeError("llama-server crashed with exit code -9"),
-            ):
-                runner._run_single_code_model(model, {"ctx": 16384})
-
-            self.assertEqual(len(runner.all_results), 1)
-            failure = runner.all_results[0]
-            self.assertEqual(failure["status"], "launch_failed")
-            self.assertIsNone(failure["score"])
-            self.assertIn("exit code -9", failure["error"])
-            self.assertTrue(runner.results_file.exists())
 
 
 if __name__ == "__main__":

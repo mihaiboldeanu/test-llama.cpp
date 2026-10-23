@@ -9,12 +9,54 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .models import ModelInfo, ResolvedModelProfile
+    from .models import ModelInfo, ResolvedProfile
+
+
+def load_batch_items(config_file: str | Path) -> list:
+    """Load a batch YAML file into per-model item entries.
+
+    Two shapes accepted:
+    - legacy: a bare list of items (model-name strings or dicts), returned
+      as-is.
+    - new: a mapping with an optional ``defaults:`` dict merged under every
+      entry of ``models:`` (per-item keys win; bare strings pick up the
+      defaults too). Batch files should declare shared launch params once
+      here instead of repeating them per model.
+    """
+    with open(config_file) as f:
+        raw = yaml.safe_load(f)
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
+        raise ValueError(
+            f"Invalid batch config {config_file}: expected a list of items "
+            "or a mapping with defaults:/models:."
+        )
+    defaults = raw.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        raise ValueError(f"Invalid batch config {config_file}: defaults: must be a mapping.")
+    items: list = []
+    for entry in raw["models"]:
+        if isinstance(entry, str):
+            items.append({**defaults, "model": entry})
+        elif isinstance(entry, dict):
+            merged = {**defaults, **entry}
+            items.append(merged)
+        else:
+            raise ValueError(
+                f"Invalid batch config {config_file}: model entries must be "
+                f"strings or mappings, got {type(entry).__name__}."
+            )
+    return items
 
 
 @dataclass(frozen=True)
@@ -22,21 +64,12 @@ class BatchItemPlan:
     """Immutable plan for a single model within a batch.
 
     Produced by BatchPlanner (pure). Executed by BatchExecutor (side-effects).
+    The profile already contains the merged llama-server args for the item.
     """
 
     model: ModelInfo
-    profile: ResolvedModelProfile
+    profile: ResolvedProfile
     backend: str
-    ctk: str | None
-    ctv: str | None
-    ctx_size: int | None
-    seed: int | None
-    mtp_enabled: bool
-    mtp_n_max: int
-    mtp_n_min: int
-    reasoning: bool | None
-    reasoning_budget: int
-    max_tokens: int | None
     config_item: dict  # Original batch config item for reference
 
 
@@ -64,7 +97,7 @@ class BatchManifest:
     run_identity: str
     batch_type: str
     fixture_hashes: dict[str, str]
-    profiles: list[dict]  # ResolvedModelProfile serialized per model
+    profiles: list[dict]  # ResolvedProfile serialized per model
     results: list[dict]  # Test results per model
 
 
@@ -83,7 +116,7 @@ def compute_run_identity(
     # Batch type
     hasher.update(batch_type.encode())
 
-    # Items in order — model name, backend, config
+    # Items in order — model name, backend, resolved launch profile
     for item in items:
         hasher.update(item.model.name.encode())
         hasher.update(item.model.path.name.encode())
@@ -92,14 +125,16 @@ def compute_run_identity(
         hasher.update(
             json.dumps(
                 {
-                    "ctk": item.ctk,
-                    "ctv": item.ctv,
-                    "ctx_size": item.ctx_size,
-                    "seed": item.seed,
-                    "mtp": item.mtp_enabled,
-                    "reasoning": item.reasoning,
+                    "args": item.profile.args,
+                    "ctx": item.profile.ctx,
+                    "fit_ctx": item.profile.fit_ctx,
+                    "reasoning": item.profile.reasoning,
+                    "mtp": item.profile.mtp,
+                    "env": item.profile.env,
+                    "alias": item.profile.alias,
                 },
                 sort_keys=True,
+                default=str,
             ).encode()
         )
 
@@ -119,7 +154,7 @@ def compute_fixture_hash(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def hash_profile(profile: ResolvedModelProfile) -> dict:
+def hash_profile(profile: ResolvedProfile) -> dict:
     """Serialize resolved profile to a JSON-serializable dict for manifest."""
     result = asdict(profile)
     # Model path needs serialization
@@ -190,21 +225,13 @@ def plan_batch(inp: BatchPlannerInput) -> BatchPlan:
         if model is None:
             continue  # Skip unknown models during planning
 
+        profile = _resolve_item_profile(model, config_item, inp)
+
         items.append(
             BatchItemPlan(
                 model=model,
-                profile=_resolve_item_profile(model, config_item, inp),
+                profile=profile,
                 backend=config_item.get("backend", "llama.cpp"),
-                ctk=config_item.get("ctk"),
-                ctv=config_item.get("ctv"),
-                ctx_size=config_item.get("ctx"),
-                seed=config_item.get("seed", inp.seed),
-                mtp_enabled=bool(config_item.get("mtp", False)),
-                mtp_n_max=int(config_item.get("mtp_n_max", 3)),
-                mtp_n_min=int(config_item.get("mtp_n_min", 0)),
-                reasoning=config_item.get("reasoning", inp.reasoning),
-                reasoning_budget=int(config_item.get("reasoning_budget", 1024)),
-                max_tokens=config_item.get("max_tokens", inp.max_tokens),
                 config_item=config_item,
             )
         )
@@ -249,15 +276,21 @@ def _resolve_item_profile(
     model: ModelInfo,
     config_item: dict,
     inp: BatchPlannerInput,
-) -> ResolvedModelProfile:
+) -> ResolvedProfile:
     """Resolve profile for a single batch item.
 
     Uses the same precedence chain as ProfileResolver:
-    CLI > Batch Override > Global Config > Family Defaults > Built-in.
+    CLI > Batch Override > Global Config > Family Config > Built-in.
     """
     from rama.families import get_registry
 
     from .resolver import ProfileResolver
+
+    batch_override = {k: v for k, v in config_item.items() if k != "model"}
+    if "seed" not in batch_override and inp.seed is not None:
+        batch_override["seed"] = inp.seed
+    if "reasoning" not in batch_override and inp.reasoning is not None:
+        batch_override["reasoning"] = inp.reasoning
 
     resolver = ProfileResolver(get_registry().get(model.family_key))
     return resolver.resolve(
@@ -265,6 +298,6 @@ def _resolve_item_profile(
         global_config=inp.global_config_override,
         family_override=(inp.family_overrides or {}).get(model.family_key),
         model_override=(inp.model_overrides or {}).get(model.name),
-        batch_override=config_item or None,
+        batch_override=batch_override or None,
         cli_override=inp.cli_override,
     )

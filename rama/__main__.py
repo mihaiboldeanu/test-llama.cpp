@@ -15,11 +15,10 @@ from .core import (
     calc_kv_cache,
     detect_backend,
     discover_models,
-    get_preferred_ctx,
     get_running_models,
     is_port_used,
 )
-from .launch import ModelStartConfig, build_backend, resolve, start_model, stop_model
+from .launch import ModelStartConfig, build_backend, start_model, stop_model
 from .testing import (
     TestRunConfig,
     discover_tests,
@@ -150,6 +149,11 @@ def start(
         "--ctx",
         help="Context size (auto calculated if not set)",
     ),
+    parallel: int | None = typer.Option(
+        None,
+        "--parallel",
+        help="Parallel slots (-np). --ctx-size is the total shared by all slots",
+    ),
     fit: bool | None = typer.Option(
         None,
         "--fit/--no-fit",
@@ -181,15 +185,15 @@ def start(
         "--mtp",
         help="Enable Multi-Token Prediction (requires model with MTP heads, e.g. Qwen3.5)",
     ),
-    mtp_n_max: int = typer.Option(
-        3,
+    mtp_n_max: int | None = typer.Option(
+        None,
         "--mtp-n-max",
-        help="Max draft tokens for MTP (default: 3, recommended 2-3 for Qwen)",
+        help="Max draft tokens for MTP (default: family/model config or 3)",
     ),
-    mtp_n_min: int = typer.Option(
-        0,
+    mtp_n_min: int | None = typer.Option(
+        None,
         "--mtp-n-min",
-        help="Min draft tokens for MTP (default: 0)",
+        help="Min draft tokens for MTP (default: family/model config or 0)",
     ),
     config_path: str | None = typer.Option(
         None,
@@ -230,6 +234,22 @@ def start(
         config_item["fit"] = fit
     if seed is not None:
         config_item["seed"] = seed
+    if parallel is not None:
+        config_item["n_parallel"] = parallel
+
+    # Resolve the same profile used for the actual launch.  This keeps the
+    # preflight display aligned with model-level preferred_ctx overrides.
+    from .domain.resolver import ProfileResolver
+    from .families import get_registry
+
+    profile = ProfileResolver(family_definition=get_registry().get(model.family))
+    profile = profile.resolve(
+        model,
+        global_config=cfg._data if hasattr(cfg, "_data") else None,
+        family_override=(cfg.get("families") or {}).get(model.family) or None,
+        model_override=(cfg.get("models") or {}).get(model.name) or None,
+        batch_override=config_item or None,
+    )
 
     # Show what context we'll get
     if ctx_size is None:
@@ -238,35 +258,35 @@ def start(
             model.family,
             cfg,
             metadata=model.metadata,
-            ctk=ctk,
-            ctv=ctv,
+            ctk=ctk or profile.args.get("-ctk"),
+            ctv=ctv or profile.args.get("-ctv"),
+            extra_args=dict(profile.args),
         )
-        preferred_ctx = get_preferred_ctx(model.size_gb, model.family, cfg)
-        launch_ctx = preferred_ctx
+        launch_ctx = profile.ctx
         if mtp:
-            family_params = (cfg.get("families") or {}).get(model.family, {})
-            model_overrides = (cfg.get("models") or {}).get(model.name, {})
-            ratio_opts = {**family_params, **model_overrides, **config_item}
-            launch_ctx = int(
-                launch_ctx
-                * resolve(
-                    ratio_opts, family_params, "mtp_ctx_ratio", 0.8, cfg
-                )
-            )
+            launch_ctx = int(launch_ctx * float(profile.mtp.get("ctx_ratio", 0.8)))
         # llama.cpp pads the requested context up to a multiple of 256
         # (GGML_PAD in llama-context.cpp), so the server's n_ctx_slot is the
         # aligned value, not the raw configured one.
         effective_ctx = ((launch_ctx + 255) // 256) * 256
+        banner_np = parallel if parallel is not None else profile.args.get("-np", 1)
+        banner_np = max(int(banner_np or 1), 1)
         console.print(
             f"[dim]Model: {model.name} ({model.size_gb}GB, {model.family})[/dim]",
         )
         console.print(f"[dim]Launch ctx={effective_ctx}, ctk={qk}, ctv={qv}[/dim]")
-        if ctx != launch_ctx:
+        if banner_np > 1:
             console.print(
-                f"[dim]Conservative F16 fit estimate={ctx}; "
+                f"[dim]Parallel slots={banner_np} "
+                f"(~{effective_ctx // banner_np:,} tokens per slot, "
+                "KV cache unified)[/dim]"
+            )
+        if ctx < launch_ctx:
+            console.print(
+                f"[dim]Conservative fit estimate={ctx}; "
                 "using the configured ctx instead[/dim]"
             )
-        if fit is not False:
+        if profile.args.get("--fit", "on") != "off":
             console.print("[dim]--fit: auto-fit model to VRAM[/dim]")
 
     try:
@@ -275,6 +295,7 @@ def start(
                 model=model,
                 backend=backend,
                 port=port,
+                parallel=parallel,
                 ctx_size=ctx_size,
                 ctk=ctk,
                 ctv=ctv,
@@ -306,7 +327,7 @@ def start(
         )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -363,7 +384,7 @@ def build(
             build_backend(b, cfg, force=force, cpu_only=cpu_only)
         except Exception as e:
             console.print(f"[red]Build failed: {e}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
 
 @app.command()
@@ -393,19 +414,16 @@ def init(
     ),
 ) -> None:
     """Create a config file and clone missing backend repos."""
-    src = Path(__file__).parent / "templates" / "rama.yaml"
     dst = Path(config_path).resolve()
 
     if dst.exists():
         console.print(f"[yellow]Config already exists: {dst}[/yellow]")
         return
 
-    # Load config from template or defaults
-    if src.exists():
-        with open(src) as f:
-            config = yaml.safe_load(f) or {}
-    else:
-        config = DEFAULT_CONFIG.copy()
+    # Seed from DEFAULT_CONFIG (single source of truth — no template copy
+    # to drift out of sync). Families tune in the generated file; until
+    # then the resolver uses built-in safe defaults.
+    config = DEFAULT_CONFIG.copy()
 
     # Clone llama.cpp if missing (use config defaults for paths)
     llama_cpp_dir = Path(
@@ -637,7 +655,10 @@ def ctxinfo(
     table.add_column("KV Type")
 
     for m in models:
-        ctx, qk, qv = calc_kv_cache(m.size_gb, m.family, cfg, metadata=m.metadata)
+        model_args = ((cfg.get("models") or {}).get(m.name) or {}).get("args") or {}
+        ctx, qk, qv = calc_kv_cache(
+            m.size_gb, m.family, cfg, metadata=m.metadata, extra_args=dict(model_args)
+        )
         kv = f"{qk}/{qv}"
         table.add_row(m.name[:35], f"{m.size_gb}GB", m.family, f"{ctx:,}", kv)
 
@@ -954,10 +975,13 @@ def run(
         help="Use TurboQuant with turbo4 KV cache",
     ),
     ctx_size: int | None = typer.Option(None, "--ctx", help="Context size"),
+    parallel: int | None = typer.Option(
+        None, "--parallel", help="Parallel slots (-np)"
+    ),
     ctk: str | None = typer.Option(None, "--ctk", help="KV cache type"),
     ctv: str | None = typer.Option(None, "--ctv", help="KV cache v type"),
-    fit: bool = typer.Option(
-        True, "--fit/--no-fit", help="Auto-fit model to VRAM (default: on)"
+    fit: bool | None = typer.Option(
+        None, "--fit/--no-fit", help="Auto-fit model to VRAM (default: model setting)"
     ),
     seed: int | None = typer.Option(
         None, "--seed", help="Random seed for generation (default: random)"
@@ -967,15 +991,15 @@ def run(
         "--mtp",
         help="Enable Multi-Token Prediction (requires model with MTP heads, e.g. Qwen3.5)",
     ),
-    mtp_n_max: int = typer.Option(
-        3,
+    mtp_n_max: int | None = typer.Option(
+        None,
         "--mtp-n-max",
-        help="Max draft tokens for MTP (default: 3, recommended 2-3 for Qwen)",
+        help="Max draft tokens for MTP (default: family/model config or 3)",
     ),
-    mtp_n_min: int = typer.Option(
-        0,
+    mtp_n_min: int | None = typer.Option(
+        None,
         "--mtp-n-min",
-        help="Min draft tokens for MTP (default: 0)",
+        help="Min draft tokens for MTP (default: family/model config or 0)",
     ),
     categories: str = typer.Option("all", "--categories", "-c", help="Test categories"),
     max_tests: int | None = typer.Option(
@@ -1015,9 +1039,12 @@ def run(
     backend, ctk, ctv = detect_backend(turbo3, turbo4, ctk, ctv)
 
     config_item = {}
-    config_item["fit"] = fit
+    if fit is not None:
+        config_item["fit"] = fit
     if seed is not None:
         config_item["seed"] = seed
+    if parallel is not None:
+        config_item["n_parallel"] = parallel
 
     result = None
     try:
@@ -1028,6 +1055,7 @@ def run(
                 model=model,
                 backend=backend,
                 port=port,
+                parallel=parallel,
                 ctx_size=ctx_size,
                 ctk=ctk,
                 ctv=ctv,
@@ -1051,7 +1079,6 @@ def run(
                 else DEFAULT_TEST_CATEGORIES
             )
             profile = result.profile
-            capabilities = profile.capabilities if profile is not None else None
             result_test = run_tests(
                 TestRunConfig(
                     port=result.port,
@@ -1059,18 +1086,7 @@ def run(
                     categories=cats,
                     max_tests_per_category=max_tests,
                     reasoning=False if no_reasoning else None,
-                    reasoning_template_key=(
-                        capabilities.reasoning_template_key
-                        if capabilities and capabilities.reasoning_template_key
-                        else "enable_thinking"
-                    ),
-                    reasoning_template_value=(
-                        capabilities.reasoning_disabled_value
-                        if no_reasoning and capabilities is not None
-                        else None
-                    ),
-                    sampler=profile.sampler if profile is not None else None,
-                    capabilities=capabilities,
+                    sampler_args=dict(profile.args) if profile is not None else None,
                     config=cfg._data,
                 )
             )
@@ -1103,7 +1119,7 @@ def run(
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -1323,9 +1339,6 @@ def explain(
     ),
 ) -> None:
     """Show resolved profile for a model (dry-run mode)."""
-    from dataclasses import asdict
-
-    from .domain.models import ModelInfo as DomainModelInfo
     from .domain.resolver import ProfileResolver
     from .families import get_registry
 
@@ -1342,14 +1355,6 @@ def explain(
         console.print(f"[red]Model not found: {model_name}[/red]")
         raise typer.Exit(1)
 
-    domain_model = DomainModelInfo(
-        name=model.name,
-        path=model.path,
-        size_bytes=int(model.size_gb * 1024**3),
-        family_key=model.family,
-        quantization=model.quant,
-    )
-
     # Load family definition from registry
     reg = get_registry()
     family_def = reg.get(model.family)
@@ -1358,7 +1363,7 @@ def explain(
     model_overrides = (cfg.get("models", {}) or {}).get(model.name, {})
     resolver = ProfileResolver(family_definition=family_def)
     profile = resolver.resolve(
-        domain_model,
+        model,
         global_config=cfg._data,
         family_override=family_params or None,
         model_override=model_overrides or None,
@@ -1371,24 +1376,19 @@ def explain(
         console.print(f"[bold]Size:[/bold] {profile.model.size_gb:.1f} GB")
         console.print()
 
-    def _print_section(title: str, dataclass_obj, prov_prefix: str):
+    def _print_mapping(title: str, mapping: dict, prefix: str):
         console.print(f"[bold]{title}:[/bold]")
-        for k, v in asdict(dataclass_obj).items():
-            prov = profile.provenance.get(f"{prov_prefix}.{k}", "builtin")
-            console.print(f"  {k}: {v} [dim]({prov})[/dim]")
+        for k in sorted(mapping):
+            prov = profile.provenance.get(f"{prefix}.{k}", "builtin")
+            console.print(f"  {k}: {mapping[k]} [dim]({prov})[/dim]")
         console.print()
 
-    _print_section("Sampler", profile.sampler, "sampler")
-    _print_section("Context", profile.context, "context")
-    _print_section("Memory", profile.memory, "memory")
-    _print_section("Launch", profile.launch, "launch")
-
-    if profile.capabilities.supports_reasoning or profile.capabilities.reasoning_template_key:
-        console.print("[bold]Capabilities:[/bold]")
-        for k, v in asdict(profile.capabilities).items():
-            prov = profile.provenance.get(f"capabilities.{k}", "builtin")
-            console.print(f"  {k}: {v} [dim]({prov})[/dim]")
-        console.print()
+    _print_mapping("Args", profile.args, "args")
+    _print_mapping("MTP", profile.mtp, "mtp")
+    _print_mapping("Environment", profile.env, "env")
+    console.print(f"[bold]Context:[/bold] {profile.ctx}")
+    console.print(f"[bold]Fit context:[/bold] {profile.fit_ctx}")
+    console.print(f"[bold]Reasoning:[/bold] {'on' if profile.reasoning else 'off'}")
 
 
 if __name__ == "__main__":

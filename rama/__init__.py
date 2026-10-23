@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import warnings
@@ -12,58 +13,161 @@ DEFAULT_CONFIG_LOCATIONS = [
 ]
 
 DEFAULT_CONFIG = {
-    "model_dir": str(Path.home() / "ollama"),
+    "model_dir": str(Path.home() / "models"),
     "llama_cpp_dir": str(Path.home() / "Projects" / "llama.cpp"),
     "turbo_dir": str(Path.home() / "Projects" / "llama-cpp-turboquant"),
     "llama_cpp_repo": "https://github.com/ggml-org/llama.cpp.git",
     "turboquant_repo": "https://github.com/TheTom/llama-cpp-turboquant.git",
-    "template_dir": str(Path(__file__).parent.parent / "templates"),
-    "reasoning_budget": 1024,
-    "reasoning_budget_message": "I have thought enough, let's move to answering.",
+    "template_dir": "templates",
     "cuda_root": "~/cuda",
     "build_jobs": 8,
-    "threads": 8,
-    "threads_batch": 16,
+    "host": "127.0.0.1",
     "vram_total_gb": 24,
     "vram_headroom_gb": 2,
-    "fit_target_mib": 1024,
-    "batch_size": 4096,
-    "ubatch_size": 2048,
-    "temp": 0.6,
-    "top_k": 20,
-    "top_p": 0.95,
-    "min_p": 0.0,
-    "repeat_penalty": 1.0,
-    "presence_penalty": 0.0,
-    "seed": None,
-    "chat_template_kwargs": '{"preserve_thinking": true}',
-    "chat_template": None,
-    "chat_template_file": None,
-    "spec_type": "ngram-mod",
-    "spec_ngram_mod_size_n": 16,
-    "spec_ngram_mod_n_min": 24,
-    "spec_ngram_mod_n_max": 48,
-    "draft_min": 8,
-    "draft_max": 24,
-    "host": "127.0.0.1",
-    "context_shift": False,
     "default_port": 11435,
     "port_range_end": 11500,
+    "rules": {
+        "small_ctx": 32768,
+        "large_ctx": 65536,
+        "small_threshold_gb": 10,
+        "mtp_ngl_threshold_gb": 20,
+        "mtp_ctx_ratio": 0.8,
+    },
+    "args": {
+        "-np": 1,
+        "--ctx-size": "auto",
+        "-ctk": "q8_0",
+        "-ctv": "q8_0",
+        "--flash-attn": "on",
+        "-b": 4096,
+        "-ub": 2048,
+        "--threads": 8,
+        "--threads-batch": 16,
+        "--temp": 0.6,
+        "--top-k": 20,
+        "--top-p": 0.95,
+        "--min-p": 0.0,
+        "--repeat-penalty": 1.0,
+        "--presence-penalty": 0.0,
+        "--perf": True,
+        "--kv-unified": True,
+        "--no-context-shift": True,
+        "--fit": "on",
+        "--fit-target": 1024,
+        "--fit-ctx": "auto",
+        "-n": 2048,
+        "--reasoning": "auto",
+    },
     "families": {},
     "models": {},
 }
 
+
 class ConfigError(ValueError):
     """Raised when a Rama configuration cannot be used safely."""
 
+
+_VALID_LOAD_MODES = {"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}
+_VALID_LAZY_MODES = {"auto", "on", "off"}
+
+
+def _translate_repetition_penalty(node: Any, warned: list[bool]) -> None:
+    if isinstance(node, dict):
+        if "repetition_penalty" in node and "--repeat-penalty" not in node:
+            node["--repeat-penalty"] = node.pop("repetition_penalty")
+            if not warned[0]:
+                warnings.warn(
+                    "Config key 'repetition_penalty' is deprecated; "
+                    "use '--repeat-penalty' instead.",
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
+                warned[0] = True
+        for value in node.values():
+            _translate_repetition_penalty(value, warned)
+
+
+def _normalize_mode_value(value: Any, allowed: set[str], path: str, key: str) -> str:
+    if isinstance(value, bool):
+        # Preserve historical boolean forms before validating the word form.
+        text = "mmap" if key == "--load-mode" and value else "none"
+        if key == "--lazy-mode":
+            text = "on" if value else "off"
+    elif isinstance(value, str):
+        text = value.strip().lower()
+    else:
+        text = str(value).strip().lower()
+    if text not in allowed:
+        raise ConfigError(f"{path}.{key} must be one of: {', '.join(sorted(allowed))}")
+    return text
+
+
+def _normalize_section_modes(section: dict[str, Any], path: str) -> None:
+    args = section.get("args")
+    if not isinstance(args, dict):
+        args = {}
+        section["args"] = args
+    legacy = {
+        "load_mode": "--load-mode",
+        "tensor_read_lazy": "--lazy-mode",
+    }
+    for old_key, flag in legacy.items():
+        if old_key in section:
+            value = section.pop(old_key)
+            if flag not in args:
+                allowed = _VALID_LOAD_MODES if flag == "--load-mode" else _VALID_LAZY_MODES
+                args[flag] = _normalize_mode_value(value, allowed, path, flag)
+    for flag, allowed in (
+        ("--load-mode", _VALID_LOAD_MODES),
+        ("--lazy-mode", _VALID_LAZY_MODES),
+    ):
+        if args.get(flag) is not None:
+            args[flag] = _normalize_mode_value(args[flag], allowed, path, flag)
+
+
+def _normalize_llama_mode_fields(cfg: dict[str, Any]) -> None:
+    _normalize_section_modes(cfg, "config")
+    for section_name in ("families", "models"):
+        section = cfg.get(section_name, {})
+        if isinstance(section, dict):
+            for name, settings in section.items():
+                if isinstance(settings, dict):
+                    _normalize_section_modes(settings, f"{section_name}.{name}")
+
+
+def _check_args_map(args: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(args, dict):
+        errors.append(f"{path}.args must be a mapping of llama-server flags")
+        return
+    for flag, value in args.items():
+        if not isinstance(flag, str) or not flag.startswith("-"):
+            errors.append(f"{path}.args keys must be llama-server flags, got {flag!r}")
+            continue
+        if value is None or isinstance(value, (bool, int, float, str)):
+            if flag == "--chat-template-kwargs" and isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    errors.append(f"{path}.args.{flag} must contain valid JSON")
+                else:
+                    if not isinstance(parsed, dict):
+                        errors.append(
+                            f"{path}.args.{flag} must decode to a JSON object"
+                        )
+            continue
+        errors.append(
+            f"{path}.args.{flag} must be a string, number, boolean, or null"
+        )
+
+
 def validate_config(cfg: dict[str, Any]) -> list[str]:
     """Return human-readable validation errors for a resolved configuration."""
-    errors = []
+    errors: list[str] = []
 
     def is_int(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
 
-    for key in ("build_jobs", "threads", "threads_batch", "batch_size", "ubatch_size"):
+    for key in ("build_jobs",):
         if key in cfg and (not is_int(cfg[key]) or cfg[key] <= 0):
             errors.append(f"{key} must be a positive integer")
 
@@ -75,49 +179,59 @@ def validate_config(cfg: dict[str, Any]) -> list[str]:
         ):
             errors.append(f"{key} must be a non-negative number")
 
-    for key in ("temp", "top_p", "min_p"):
-        if key in cfg and (
-            not isinstance(cfg[key], (int, float))
-            or isinstance(cfg[key], bool)
-            or not 0 <= cfg[key] <= (2 if key == "temp" else 1)
-        ):
-            maximum = 2 if key == "temp" else 1
-            errors.append(f"{key} must be a number between 0 and {maximum}")
-
-    if "top_k" in cfg and (not is_int(cfg["top_k"]) or cfg["top_k"] < -1):
-        errors.append("top_k must be an integer greater than or equal to -1")
-
     for key in ("default_port", "port_range_end"):
         if key in cfg and (not is_int(cfg[key]) or not 1024 <= cfg[key] <= 65535):
             errors.append(f"{key} must be a TCP port between 1024 and 65535")
     if cfg.get("default_port", 0) > cfg.get("port_range_end", 0):
         errors.append("default_port must not be greater than port_range_end")
 
-    families = cfg.get("families", {})
-    if not isinstance(families, dict):
-        errors.append("families must be a mapping of family names to settings")
-    elif any(not isinstance(settings, dict) for settings in families.values()):
-        errors.append("every family setting must be a mapping")
+    rules = cfg.get("rules", {})
+    if not isinstance(rules, dict):
+        errors.append("rules must be a mapping of runtime thresholds")
+    else:
+        for key in (
+            "small_ctx",
+            "large_ctx",
+            "small_threshold_gb",
+            "mtp_ngl_threshold_gb",
+            "mtp_ctx_ratio",
+        ):
+            value = rules.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(f"rules.{key} must be a number")
+            elif value <= 0:
+                errors.append(f"rules.{key} must be a positive number")
 
-    models = cfg.get("models", {})
-    if not isinstance(models, dict):
-        errors.append("models must be a mapping of model names to settings")
-    elif any(not isinstance(settings, dict) for settings in models.values()):
-        errors.append("every model setting must be a mapping")
+    _check_args_map(cfg.get("args", {}), "config", errors)
 
-    template_kwargs = cfg.get("chat_template_kwargs")
-    if template_kwargs is not None:
-        if not isinstance(template_kwargs, str):
-            errors.append("chat_template_kwargs must be a JSON object string")
-        else:
-            try:
-                parsed = json.loads(template_kwargs)
-                if not isinstance(parsed, dict):
-                    errors.append("chat_template_kwargs must decode to a JSON object")
-            except json.JSONDecodeError:
-                errors.append("chat_template_kwargs must contain valid JSON")
+    for section_name in ("families", "models"):
+        section = cfg.get(section_name, {})
+        if not isinstance(section, dict):
+            errors.append(f"{section_name} must be a mapping of names to settings")
+            continue
+        for name, settings in section.items():
+            if not isinstance(settings, dict):
+                errors.append(f"every {section_name.rstrip('s')} setting must be a mapping")
+                continue
+            path = f"{section_name}.{name}"
+            if "args" in settings:
+                _check_args_map(settings["args"], path, errors)
+            for key in ("small_ctx", "large_ctx"):
+                if key in settings and (
+                    not is_int(settings[key]) or settings[key] <= 0
+                ):
+                    errors.append(f"{path}.{key} must be a positive integer")
+            env = settings.get("env")
+            if env is not None and not isinstance(env, dict):
+                errors.append(f"{path}.env must be a mapping")
+            mtp = settings.get("mtp")
+            if mtp is not None and not isinstance(mtp, (bool, dict)):
+                errors.append(f"{path}.mtp must be a boolean or mapping")
 
     return errors
+
 
 def _detect_vram_gb() -> float | None:
     """Auto-detect VRAM via nvidia-smi."""
@@ -141,6 +255,7 @@ def _detect_vram_gb() -> float | None:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
     return None
+
 
 def _detect_cuda_arch() -> str | None:
     """Auto-detect CUDA architecture from GPU name."""
@@ -179,9 +294,20 @@ def _detect_cuda_arch() -> str | None:
         pass
     return None
 
+
+def _deep_merge(base: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Merge user settings over defaults; a partial section keeps the rest."""
+    for key, value in user.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     """Load config from file or use defaults."""
-    cfg = DEFAULT_CONFIG.copy()
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
 
     # Find config file
     if config_path:
@@ -199,29 +325,8 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         if not isinstance(user_cfg, dict):
             raise ConfigError(f"Configuration file must contain a mapping: {path}")
 
-        # Handle repetition_penalty translation with deprecation warning
-        _repetition_warned = False
-
-        def translate_repetition(d: dict):
-            nonlocal _repetition_warned
-            if "repetition_penalty" in d:
-                d["repeat_penalty"] = d.pop("repetition_penalty")
-                if not _repetition_warned:
-                    warnings.warn(
-                        "Config key 'repetition_penalty' is deprecated; "
-                        "use 'repeat_penalty' instead.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                    _repetition_warned = True
-            for section in ("families", "models"):
-                if section in d and isinstance(d[section], dict):
-                    for name, settings in d[section].items():
-                        if isinstance(settings, dict):
-                            translate_repetition(settings)
-
-        translate_repetition(user_cfg)
-        cfg.update(user_cfg)
+        _translate_repetition_penalty(user_cfg, [False])
+        _deep_merge(cfg, user_cfg)
 
     # Auto-detect VRAM if not set by user
     if cfg.get("vram_total_gb") == DEFAULT_CONFIG["vram_total_gb"]:
@@ -240,11 +345,13 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         if key in cfg:
             cfg[key] = os.path.expanduser(str(cfg[key]))
 
+    _normalize_llama_mode_fields(cfg)
     errors = validate_config(cfg)
     if errors:
         raise ConfigError("Invalid Rama configuration:\n- " + "\n- ".join(errors))
 
     return cfg
+
 
 class Config:
     """Config object with nice accessors."""
@@ -288,3 +395,15 @@ class Config:
     @property
     def families(self) -> dict:
         return self._data.get("families", {})
+
+    @property
+    def models(self) -> dict:
+        return self._data.get("models", {})
+
+    @property
+    def args(self) -> dict:
+        return self._data.get("args", {})
+
+    @property
+    def rules(self) -> dict:
+        return self._data.get("rules", {})

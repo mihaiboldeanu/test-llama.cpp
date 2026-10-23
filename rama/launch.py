@@ -1,5 +1,4 @@
 import os
-import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -13,27 +12,14 @@ from .core import (
     get_pid_dir,
     is_port_used,
 )
-from .domain.planner import PlannerInput, plan
-from .domain.resolver import ProfileResolver, ResolvedModelProfile
-from .domain.runner import RunnerInput
+from .domain.planner import PlanRequest, plan
+from .domain.resolver import ProfileResolver, ResolvedProfile
+from .domain.runner import RunnerInput, pid_exists, terminate_process
 from .domain.runner import run as run_server
 from .families import get_registry
 from .log import setup_logging
 
 logger = setup_logging()
-
-
-def resolve(opts: dict, family: dict, key: str, default, config=None):
-    """Resolve config value: opts > family > [config] > default."""
-    if key in opts:
-        return opts[key]
-    if family and key in family:
-        return family[key]
-    if config and key in config:
-        return config[key]
-    if default is not None:
-        logger.debug("Using default for '%s': %s", key, default)
-    return default
 
 
 def _resolve_draft_model_path(config: Config, reference: str) -> str:
@@ -79,7 +65,7 @@ class LaunchResult:
     backend: str
     ctx_size: int
     seed: int | None = None
-    profile: ResolvedModelProfile | None = None
+    profile: ResolvedProfile | None = None
     argv: list[str] | None = None  # Set during dry_run
 
 
@@ -93,6 +79,7 @@ class ModelStartConfig:
 
     # Server settings
     port: int | None = None
+    parallel: int | None = None
     ctx_size: int | None = None
     ctk: str | None = None
     ctv: str | None = None
@@ -112,8 +99,8 @@ class ModelStartConfig:
 
     # MTP
     mtp: bool = False
-    mtp_n_max: int = 3
-    mtp_n_min: int = 0
+    mtp_n_max: int | None = None
+    mtp_n_min: int | None = None
 
     # Config overrides
     family_params: dict | None = None
@@ -124,62 +111,7 @@ class ModelStartConfig:
     dry_run: bool = False
 
 
-def _pid_exists(pid: int) -> bool:
-    """Return True if a process appears to be alive."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
 
-
-def _terminate_pid(pid: int, grace_seconds: float = 8.0) -> bool:
-    """Best-effort terminate a process, escalating to SIGKILL if needed."""
-    if not pid:
-        return False
-
-    # Kill the process first, escalate to the whole group if needed.
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return False
-
-    deadline = time.time() + grace_seconds
-    while time.time() < deadline:
-        if not _pid_exists(pid):
-            return True
-        time.sleep(0.2)
-
-    # Process didn't die — try the whole group (start_new_session=True means we own it).
-    try:
-        os.killpg(pid, signal.SIGTERM)
-    except OSError:
-        pass
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        if not _pid_exists(pid):
-            return True
-        time.sleep(0.2)
-
-    # Force kill — process first, then group.
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except OSError:
-        pass
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        if not _pid_exists(pid):
-            return True
-        time.sleep(0.1)
-
-    return not _pid_exists(pid)
 
 
 def _wait_for_port_free(port: int, timeout: float = 5.0) -> bool:
@@ -296,10 +228,110 @@ def build_backend(
     logger.info("Built %s", backend)
 
 
-def start_model(cfg: ModelStartConfig) -> LaunchResult | None:
-    """Start a llama.cpp model server."""
+def _ensure_available_port(port: int | None, config: Config) -> int:
+    """Resolve a launch port, stopping a stale Rama server if needed."""
+    if port is None:
+        return find_free_port(config)
+
+    if is_port_used(port):
+        logger.info("Port %d is already in use, stopping existing model first...", port)
+        stop_model(port, config)
+        if not _wait_for_port_free(port):
+            # Only kill Rama-owned PIDs, not arbitrary processes on this port
+            owned_pid = get_model_pid(config, port)
+            if owned_pid and pid_exists(owned_pid):
+                logger.info(
+                    "Terminating stuck Rama process PID %d on port %d", owned_pid, port
+                )
+                terminate_process(owned_pid)
+                time.sleep(2)
+                _wait_for_port_free(port)
+                time.sleep(1)
+
+        if is_port_used(port):
+            logger.warning("Port %d still busy, picking another free port...", port)
+            port = find_free_port(config, port + 1)
+
+    return port
+
+
+def _cli_flag_overrides(cfg: "ModelStartConfig") -> dict:
+    """Translate direct launch fields into literal-flag CLI overrides."""
+    overrides: dict = {}
+    if cfg.parallel is not None:
+        overrides["-np"] = cfg.parallel
+    if cfg.ctx_size is not None:
+        overrides["--ctx-size"] = cfg.ctx_size
+    if cfg.ctk is not None:
+        overrides["-ctk"] = cfg.ctk
+    if cfg.ctv is not None:
+        overrides["-ctv"] = cfg.ctv
+    if cfg.reasoning is not None:
+        overrides["--reasoning"] = cfg.reasoning
+    if cfg.reasoning_budget is not None:
+        overrides["--reasoning-budget"] = cfg.reasoning_budget
+    if cfg.seed is not None:
+        overrides["-s"] = cfg.seed
+    if cfg.draft_model is not None:
+        overrides["--model-draft"] = cfg.draft_model
+    if cfg.draft_model is not None:
+        # Explicit draft bounds only apply to an explicitly paired draft.
+        overrides["--spec-draft-n-max"] = cfg.draft_max
+        overrides["--spec-draft-n-min"] = cfg.draft_min
+    if cfg.spec_ngram:
+        overrides["--spec-ngram"] = True
+    if cfg.mtp:
+        overrides["mtp"] = True
+    if cfg.mtp_n_max is not None:
+        overrides["mtp_n_max"] = cfg.mtp_n_max
+    if cfg.mtp_n_min is not None:
+        overrides["mtp_n_min"] = cfg.mtp_n_min
+    return overrides
+
+
+def _resolve_profile(cfg: "ModelStartConfig", config: Config) -> ResolvedProfile:
+    family_def = get_registry().get(cfg.model.family)
+    family_override = cfg.family_params or config.families.get(cfg.model.family, {})
+    model_override = (config.get("models", {}) or {}).get(cfg.model.name, {})
+    resolver = ProfileResolver(family_definition=family_def)
+    return resolver.resolve(
+        cfg.model,
+        global_config=config._data if hasattr(config, "_data") else None,
+        family_override=family_override or None,
+        model_override=model_override or None,
+        batch_override=cfg.config_item or None,
+        cli_override=_cli_flag_overrides(cfg) or None,
+    )
+
+
+def _with_resolved_draft_paths(
+    config: Config, profile: ResolvedProfile, *, mtp_enabled: bool = False
+) -> tuple[ResolvedProfile, str | None]:
+    """Resolve draft references against the configured model directory."""
+    from dataclasses import replace
+
+    args = dict(profile.args)
+    provenance = dict(profile.provenance)
+    draft_reference = args.get("--model-draft")
+    if draft_reference is not None:
+        resolved = _resolve_draft_model_path(config, str(draft_reference))
+        if resolved != str(draft_reference):
+            args["--model-draft"] = resolved
+            provenance["args.--model-draft"] = "launch draft resolution"
+
+    mtp_draft = profile.mtp.get("draft_model") if isinstance(profile.mtp, dict) else None
+    resolved_mtp_draft = None
+    if mtp_draft is not None and mtp_enabled:
+        # External MTP heads are only needed for MTP launches; do not fail
+        # plain launches when the sidecar file is absent.
+        resolved_mtp_draft = _resolve_draft_model_path(config, str(mtp_draft))
+    return replace(profile, args=args, provenance=provenance), resolved_mtp_draft
+
+
+def _prepare_launch_context(
+    cfg: "ModelStartConfig",
+) -> tuple[Config, Path, ModelInfo, ResolvedProfile]:
     config = cfg.config or Config()
-    explicit_overrides = cfg.config_item or {}
     server_bin = get_server_bin(cfg.backend, config)
 
     if not server_bin.exists():
@@ -309,226 +341,45 @@ def start_model(cfg: ModelStartConfig) -> LaunchResult | None:
     model = cfg.model
     if not Path(model.path).exists():
         raise FileNotFoundError(f"Model file not found: {model.path}")
-    family = model.family
-    family_def = get_registry().get(family)
-    family_params = cfg.family_params or config.families.get(family, {})
 
-    model_overrides = (config.get("models", {}) or {}).get(model.name, {})
-    # Explicit batch/CLI options win over model-specific overrides, which win
-    # over family defaults.  All launch settings use this same precedence.
-    opts = {**family_params, **model_overrides, **explicit_overrides}
+    profile = _resolve_profile(cfg, config)
+    mtp_enabled = cfg.mtp or bool(profile.mtp.get("enabled", False))
+    profile, _ = _with_resolved_draft_paths(
+        config, profile, mtp_enabled=mtp_enabled
+    )
+    return config, server_bin, model, profile
 
-    # Resolve typed profile with provenance tracking
-    domain_model = model.to_domain()
-    resolver = ProfileResolver(family_definition=family_def)
-    profile = resolver.resolve(
-        domain_model,
-        global_config=config._data if hasattr(config, "_data") else None,
-        family_override=family_params or None,
-        model_override=model_overrides or None,
-        batch_override=explicit_overrides or None,
-    )
 
-    chat_template = opts.get("chat_template", config.get("chat_template"))
-    chat_template_file = opts.get(
-        "chat_template_file", config.get("chat_template_file")
+def _build_launch_args(
+    cfg: "ModelStartConfig",
+    config: Config,
+    server_bin: Path,
+    model: ModelInfo,
+    profile: ResolvedProfile,
+) -> tuple[list[str], int, int, int | None, str]:
+    port = _ensure_available_port(cfg.port, config)
+    host = str(profile.args.get("--host", config.get("host", "127.0.0.1")))
+    mtp_enabled = cfg.mtp or bool(profile.mtp.get("enabled", False))
+    _, resolved_mtp_draft = _with_resolved_draft_paths(
+        config, profile, mtp_enabled=mtp_enabled
     )
+    rules = config.get("rules", {}) if isinstance(config.get("rules", {}), dict) else {}
 
-    template_dir = config.get("template_dir")
-    if template_dir and chat_template_file:
-        chat_template_file = str(Path(template_dir) / chat_template_file)
-
-    preferred_ctx = opts.get("preferred_ctx")
-    if preferred_ctx is None:
-        preferred_ctx = (
-            profile.context.small_ctx
-            if model.size_gb < 10
-            else profile.context.large_ctx
-        )
-
-    ctx_size = cfg.ctx_size
-    if ctx_size is None:
-        ctx_size = preferred_ctx
-    qk_type = cfg.ctk or profile.launch.ctk or "q8_0"
-    qkv_type = cfg.ctv or profile.launch.ctv or "q8_0"
-
-    # The planner applies the MTP ctx ratio exactly once (see planner.py);
-    # only resolve it here so family/model overrides reach the planner.
-    mtp_ctx_ratio = resolve(opts, family_params, "mtp_ctx_ratio", 0.8, config)
-
-    port = cfg.port
-    if port is None:
-        port = find_free_port(config)
-    elif is_port_used(port):
-        logger.info("Port %d is already in use, stopping existing model first...", port)
-        stop_model(port, config)
-        if not _wait_for_port_free(port):
-            # Only kill Rama-owned PIDs, not arbitrary processes on this port
-            owned_pid = get_model_pid(config, port)
-            if owned_pid and _pid_exists(owned_pid):
-                logger.info("Terminating stuck Rama process PID %d on port %d", owned_pid, port)
-                _terminate_pid(owned_pid)
-                time.sleep(2)
-                _wait_for_port_free(port)
-                time.sleep(1)
-
-        if is_port_used(port):
-            logger.warning("Port %d still busy, picking another free port...", port)
-            port = find_free_port(config, port + 1)
-
-    # Resolve launch settings from config chain
-    fit_target = profile.memory.fit_target_mib
-    n_gpu_layers = profile.memory.n_gpu_layers
-    use_mmap = profile.memory.use_mmap
-    skip_chat_parsing = profile.capabilities.skip_chat_parsing or opts.get(
-        "skip_chat_parsing", config.get("skip_chat_parsing", False)
-    )
-    seed_val = profile.launch.seed
-    if seed_val is not None:
-        seed_val = int(seed_val)
-
-    cpu_moe = resolve(opts, family_params, "cpu_moe", False)
-    n_cpu_moe = resolve(opts, family_params, "n_cpu_moe", None)
-    alias = resolve(opts, family_params, "alias", model.name)
-    batch_size = int(resolve(opts, family_params, "batch_size", 2048, config))
-    ubatch_size = int(resolve(opts, family_params, "ubatch_size", 2048, config))
-    threads = int(resolve(opts, family_params, "threads", config["build_jobs"], config))
-    threads_batch = int(
-        resolve(opts, family_params, "threads_batch", max(threads, 16), config)
-    )
-    n_predict = int(resolve(opts, family_params, "n_predict", 2048, config))
-    samplers_val = resolve(opts, family_params, "samplers", None)
-    no_mmproj = resolve(opts, family_params, "no_mmproj", False)
-    cache_ram = resolve(opts, family_params, "cache_ram", None, config)
-    chat_template_kwargs = resolve(
-        opts, family_params, "chat_template_kwargs", None, config
-    )
-    spec_ngram_mod_size_n = resolve(
-        opts, family_params, "spec_ngram_mod_size_n", None, config
-    )
-    spec_ngram_mod_n_min = resolve(
-        opts, family_params, "spec_ngram_mod_n_min", None, config
-    )
-    spec_ngram_mod_n_max = resolve(
-        opts, family_params, "spec_ngram_mod_n_max", None, config
-    )
-    spec_type = resolve(opts, family_params, "spec_type", None, config)
-
-    # Reasoning settings
-    is_small = model.size_gb < opts.get("small_threshold_gb", 10)
-    reasoning_budget = cfg.reasoning_budget or opts.get(
-        "reasoning_budget",
-        family_params.get("reasoning_budget", config.get("reasoning_budget", 1024)),
-    )
-    reasoning_msg = opts.get(
-        "reasoning_budget_message",
-        family_params.get(
-            "reasoning_budget_message",
-            config.get(
-                "reasoning_budget_message",
-                "I have thought enough, let's move to answering.",
-            ),
-        ),
-    )
-    enable_reasoning = (
-        cfg.reasoning
-        if cfg.reasoning is not None
-        else opts.get("default_reasoning", not is_small)
-    )
-    reasoning_template_key = resolve(
-        opts, family_params, "reasoning_template_key", "enable_thinking", config
-    )
-    reasoning_template_value = resolve(
-        opts,
-        family_params,
-        "reasoning_enabled_value" if enable_reasoning else "reasoning_disabled_value",
-        enable_reasoning,
-        config,
-    )
-
-    draft_reference = cfg.draft_model or resolve(
-        opts, family_params, "draft_model", None, config
-    )
-    draft_model = (
-        _resolve_draft_model_path(config, draft_reference)
-        if draft_reference is not None
-        else None
-    )
-    draft_max = (
-        cfg.draft_max
-        if cfg.draft_model is not None
-        else int(resolve(opts, family_params, "draft_max", 16, config))
-    )
-    draft_min = (
-        cfg.draft_min
-        if cfg.draft_model is not None
-        else int(resolve(opts, family_params, "draft_min", 0, config))
-    )
-
-    # Build pure planner input — argv construction is a pure function
-    planner_inp = PlannerInput(
-        model=domain_model,
-        backend=cfg.backend,
+    request = PlanRequest(
         server_bin=server_bin,
+        model=model,
+        profile=profile,
+        host=host,
         port=port,
-        host=str(config["host"]),
-        ctx_size=ctx_size,
-        preferred_ctx=preferred_ctx,
-        ctk=qk_type,
-        ctv=qkv_type,
-        sampler=profile.sampler,
-        fit_target_mib=fit_target,
-        n_gpu_layers=n_gpu_layers,
-        use_mmap=use_mmap,
-        capabilities=profile.capabilities,
-        seed=seed_val,
-        skip_chat_parsing=skip_chat_parsing,
-        log_disable=cfg.log_disable,
-        context_shift=config.get("context_shift", False),
-        chat_template=chat_template,
-        chat_template_file=chat_template_file,
-        reasoning=enable_reasoning,
-        reasoning_budget=reasoning_budget,
-        reasoning_msg=reasoning_msg,
-        reasoning_template_key=reasoning_template_key,
-        reasoning_template_value=reasoning_template_value,
-        draft_model=draft_model,
-        draft_max=draft_max,
-        draft_min=draft_min,
-        spec_ngram=cfg.spec_ngram,
-        spec_type=spec_type,
-        spec_ngram_mod_size_n=spec_ngram_mod_size_n,
-        spec_ngram_mod_n_min=spec_ngram_mod_n_min,
-        spec_ngram_mod_n_max=spec_ngram_mod_n_max,
+        backend=cfg.backend,
         mtp=cfg.mtp,
         mtp_n_max=cfg.mtp_n_max,
         mtp_n_min=cfg.mtp_n_min,
-        mtp_ctx_ratio=mtp_ctx_ratio,
-        mtp_ngl_threshold_gb=opts.get("mtp_ngl_threshold_gb", 20),
-        cpu_moe=cpu_moe,
-        n_cpu_moe=n_cpu_moe,
-        alias=alias,
-        batch_size=batch_size,
-        ubatch_size=ubatch_size,
-        threads=threads,
-        threads_batch=threads_batch,
-        n_predict=n_predict,
-        samplers=samplers_val,
-        no_mmproj=no_mmproj,
-        cache_ram=cache_ram,
-        chat_template_kwargs=chat_template_kwargs,
-        fit_enabled=opts.get("fit", True),
-        fit_ctx_enabled=opts.get("fit_ctx", True),
-        small_threshold_gb=opts.get("small_threshold_gb", 10),
-        draft_min_val=opts.get(
-            "draft_min", family_params.get("draft_min", config.get("spec_ngram_mod_n_min"))
-        ),
-        draft_max_val=opts.get(
-            "draft_max", family_params.get("draft_max", config.get("spec_ngram_mod_n_max"))
-        ),
+        mtp_draft_model=resolved_mtp_draft,
+        template_dir=config.get("template_dir"),
+        small_threshold_gb=float(rules.get("small_threshold_gb", 10)),
     )
-
-    args = plan(planner_inp)
+    args = plan(request)
 
     # Final port check — TOCTOU guard right before launch
     if is_port_used(port):
@@ -538,6 +389,22 @@ def start_model(cfg: ModelStartConfig) -> LaunchResult | None:
             if a == "--port":
                 args[i + 1] = str(port)
                 break
+
+    seed_value = profile.args.get("-s")
+    seed = None if seed_value is None else int(seed_value)
+    return args, port, profile.ctx, seed, host
+
+
+def start_model(cfg: ModelStartConfig) -> LaunchResult | None:
+    """Start a llama.cpp model server."""
+    config, server_bin, model, profile = _prepare_launch_context(cfg)
+    args, port, ctx_size, seed_val, host = _build_launch_args(
+        cfg,
+        config,
+        server_bin,
+        model,
+        profile,
+    )
 
     if cfg.dry_run:
         return LaunchResult(
@@ -555,16 +422,25 @@ def start_model(cfg: ModelStartConfig) -> LaunchResult | None:
     if not cfg.log_disable:
         logger.info("Starting %s on port %d...", model.name, port)
 
+    launch_env = os.environ.copy()
+    if profile.env:
+        launch_env.update({str(k): str(v) for k, v in profile.env.items()})
+
     if cfg.foreground:
-        subprocess.run(args)
+        completed = subprocess.run(args, env=launch_env)
+        if completed.returncode:
+            raise RuntimeError(
+                f"llama-server exited during startup with code {completed.returncode}"
+            )
         return None
 
     runner_inp = RunnerInput(
         args=tuple(args),
         model_name=model.name,
         port=port,
-        host=str(config["host"]),
+        host=host,
         pid_dir=get_pid_dir(),
+        env=launch_env,
     )
     result = run_server(runner_inp, log_disable=cfg.log_disable)
     if not cfg.log_disable:
@@ -588,7 +464,7 @@ def stop_model(port: int, config: Config = None) -> bool:
 
     if pid:
         try:
-            stopped = _terminate_pid(pid)
+            stopped = terminate_process(pid)
             # Give process time to shut down and release port
             time.sleep(1.0)
             # Remove PID file

@@ -11,6 +11,7 @@ Designed to be used by the CLI and/or programmatically.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import random
@@ -22,7 +23,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
 from rich.console import Console
 
 from rama.context_test import run_needle_suite
@@ -31,7 +31,7 @@ from rama.core import (
     discover_models,
     find_free_port,
 )
-from rama.domain.batch_planner import BatchPlannerInput, plan_batch
+from rama.domain.batch_planner import BatchPlannerInput, load_batch_items, plan_batch
 from rama.launch import (
     ModelStartConfig,
     _wait_for_port_free,
@@ -56,6 +56,17 @@ from .system_prompt import (
 
 console = Console()
 logger = setup_logging()
+
+
+def _optional_int(value: Any) -> int | None:
+    """Return an int for an explicit batch override, else None.
+
+    None lets the resolved family/model profile supply the default instead
+    of a hard-coded fallback masking it.
+    """
+    if value is None:
+        return None
+    return int(value)
 
 
 @dataclass
@@ -221,8 +232,7 @@ class BatchRunner:
         self.cfg = Config(self.config.config_path)
         self.models = discover_models(self.cfg)
 
-        with open(self.config.config_file) as f:
-            self.batch_config = yaml.safe_load(f) or []
+        self.batch_config = load_batch_items(self.config.config_file)
 
         self.output_path = Path(self.config.output_dir)
         self.output_path.mkdir(exist_ok=True)
@@ -893,10 +903,8 @@ class BatchRunner:
                 .split()
             )
             for p in pids:
-                try:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(int(p), 9)
-                except (ProcessLookupError, PermissionError):
-                    pass
             if pids:
                 time.sleep(1)
         except (subprocess.SubprocessError, PermissionError):
@@ -928,6 +936,417 @@ class BatchRunner:
                         pass
         return None
 
+    def _build_system_prompts(self, model: Any, cats: list[str]) -> dict[str, str]:
+        cat_prompts = {}
+        if self.config.system_prompt:
+            for cat in cats:
+                cat_prompts[cat] = self.config.system_prompt
+        else:
+            for cat in cats:
+                if cat == "code":
+                    cat_prompts[cat] = get_code_system_prompt(model.name)
+                elif cat == "debugging":
+                    cat_prompts[cat] = get_debug_system_prompt(model.name)
+                else:
+                    cat_prompts[cat] = get_system_prompt(model.name, cat)
+        return cat_prompts
+
+    def _build_context_payload(self) -> tuple[str | None, list[str] | None]:
+        if self.config.difficulty == "easy":
+            return None, None
+
+        diff_config = {
+            "easy": {"wiki_tokens": 0, "code_files": []},
+            "medium": {"wiki_tokens": 4000, "code_files": []},
+            "hard": {
+                "wiki_tokens": 8000,
+                "code_files": ["tests/code/*.txt", "count: 3"],
+            },
+            "expert": {
+                "wiki_tokens": 16000,
+                "code_files": [
+                    "tests/code/*.txt",
+                    "tests/debugging/*.txt",
+                ],
+            },
+        }
+        level_cfg = diff_config.get(self.config.difficulty, diff_config["easy"])
+
+        context_text = None
+        wiki_path = Path("wikitext-2/wiki.valid.tokens")
+        if level_cfg["wiki_tokens"] > 0 and wiki_path.exists():
+            full = wiki_path.read_text()
+            max_chars = level_cfg["wiki_tokens"] * 4
+            if len(full) > max_chars:
+                truncated = full[:max_chars]
+                last_space = truncated.rfind(" ")
+                if last_space > max_chars // 2:
+                    truncated = truncated[:last_space]
+                context_text = truncated
+            else:
+                context_text = full
+
+        code_contents = []
+        for pattern_spec in level_cfg.get("code_files", []):
+            if pattern_spec.startswith("tests/"):
+                parts = [p.strip() for p in pattern_spec.split(",")]
+                glob_pattern = parts[0]
+                count = None
+                for part in parts[1:]:
+                    if part.startswith("count:"):
+                        count = int(part.split(":")[1].strip())
+                        break
+                files = sorted(
+                    Path(glob_pattern).parent.glob(glob_pattern.split("/")[-1])
+                )
+                files = [f for f in files if f.suffix == ".txt"]
+                if count is not None and len(files) > count:
+                    random.shuffle(files)
+                    files = files[:count]
+                for f in files:
+                    code_contents.append(f.read_text())
+
+        return context_text, (code_contents if code_contents else None)
+
+    def _seed_runs_for_config(self, cats: list[str]) -> list[dict[str, Any]]:
+        seeds = range(1, self.config.seeds + 1) if self.config.multi_seed else [self.config.seed]
+        return [
+            {
+                "run_type": "family",
+                "seed": seed,
+                "categories": cats,
+            }
+            for seed in seeds
+        ]
+
+    def _single_code_run_summary(
+        self,
+        run_type: str,
+        run_seed: int,
+        sampler_args: dict | None,
+        run_results: list[Any],
+        run_start: float,
+    ) -> dict[str, Any]:
+        from rama.testing import sampler_fields_from_args
+
+        scored_results = [r.score for r in run_results if r.score is not None]
+        sampling = {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "top_k": None,
+            "min_p": None,
+            "presence_penalty": None,
+            "repeat_penalty": None,
+        }
+        sampling.update(sampler_fields_from_args(sampler_args))
+        return {
+            "run_type": run_type,
+            "seed": run_seed,
+            "sampling": sampling,
+            "test_time_seconds": round(time.perf_counter() - run_start, 3),
+            "score": (
+                sum(scored_results) / len(scored_results) if scored_results else None
+            ),
+            "tests": len(run_results),
+            "passed": sum(r.correct for r in run_results),
+            "executed": sum(r.ran for r in run_results),
+            "empty": sum(not r.response.strip() for r in run_results),
+        }
+
+    def _print_single_seed_results(
+        self, test_result: Any, run_type: str, run_seed: int
+    ) -> None:
+        for r in test_result.results:
+            label = f"{r.name} ({run_type} s{run_seed})"
+            if r.score is None:
+                status = "N/A"
+            elif r.correct:
+                status = f"PASS {r.score:.1f}/10"
+            elif not r.response.strip():
+                status = "EMPTY 0/10"
+            elif not r.ran:
+                status = f"NO-RUN {r.score:.1f}/10"
+            else:
+                status = f"FAIL {r.score:.1f}/10"
+            console.print(f"    {label}: {status}")
+
+    def _run_single_seed_tests(
+        self,
+        port: int,
+        run_type: str,
+        run_seed: int,
+        run_categories: list[str],
+        cat_prompts: dict[str, str],
+        context_text: str | None,
+        context_files: list[str] | None,
+        sampler_args: dict | None,
+        effective_reasoning: bool | None,
+        reasoning_template_key: str,
+        reasoning_template_value: Any,
+        max_tokens: int,
+        run_start: float,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        try:
+            test_result = run_tests(
+                TestRunConfig(
+                    port=port,
+                    categories=run_categories,
+                    system_prompt=cat_prompts,
+                    warmup_rounds=0,
+                    context_text=context_text,
+                    context_files=context_files,
+                    context_placement=self.config.placement,
+                    sampler_args=sampler_args,
+                    seed=run_seed,
+                    max_tokens=max_tokens,
+                    reasoning=effective_reasoning,
+                    reasoning_template_key=reasoning_template_key,
+                    reasoning_template_value=reasoning_template_value,
+                    max_tests_per_category=self.config.max_tests_per_category,
+                )
+            )
+            run_results = []
+            for r in test_result.results:
+                r.metadata = {
+                    "run_type": run_type,
+                    "seed": run_seed,
+                    "test_time": time.perf_counter() - run_start,
+                }
+                run_results.append(r)
+
+            summary = self._single_code_run_summary(
+                run_type, run_seed, sampler_args, run_results, run_start
+            )
+            if not self.config.quiet:
+                self._print_single_seed_results(test_result, run_type, run_seed)
+            return run_results, summary
+        except Exception as e:
+            if not self.config.quiet:
+                console.print(
+                    f"    [red]Run seed={run_seed} ({run_type}) failed: {e}[/red]"
+                )
+            return [], {
+                "run_type": run_type,
+                "seed": run_seed,
+                "status": "failed",
+                "error": str(e),
+            }
+
+    def _single_code_failure_data(
+        self,
+        model: Any,
+        backend: str,
+        ctk: str | None,
+        ctv: str | None,
+        ctx_size: Any,
+        effective_reasoning: bool | None,
+        mtp_enabled: bool,
+        error: Exception,
+    ) -> dict[str, Any]:
+        return {
+            "model": model.name,
+            "backend": backend,
+            "ctk": ctk or "q8_0",
+            "ctv": ctv or "q8_0",
+            "ctx": ctx_size or "auto",
+            "reasoning": effective_reasoning,
+            "mtp": mtp_enabled,
+            "status": "launch_failed",
+            "error": str(error),
+            "runs": [],
+            "sampled_runs": 0,
+            "score": None,
+            "score_mean": None,
+            "score_stddev": 0.0,
+            "test_time_seconds": 0.0,
+            "evaluation": summarize_evaluation([]),
+            "tests": [],
+        }
+
+    def _build_single_code_result_data(
+        self,
+        model: Any,
+        config_item: dict,
+        backend: str,
+        ctk: str | None,
+        ctv: str | None,
+        ctx_size: Any,
+        effective_reasoning: bool | None,
+        mtp_enabled: bool,
+        run_summaries: list[dict[str, Any]],
+        all_test_results: list[Any],
+        test_duration: float,
+    ) -> tuple[dict[str, Any], Any, float | None, float]:
+        from .base import TestSuiteResult
+
+        sampled_results = all_test_results
+        sampled_run_scores = [
+            float(run["score"])
+            for run in run_summaries
+            if run.get("run_type") == "family" and run.get("score") is not None
+        ]
+        score_mean = (
+            sum(sampled_run_scores) / len(sampled_run_scores)
+            if sampled_run_scores
+            else None
+        )
+        score_stddev = (
+            statistics.stdev(sampled_run_scores)
+            if len(sampled_run_scores) > 1
+            else 0.0
+        )
+        test_result = TestSuiteResult(
+            model_name=model.name,
+            backend=backend,
+            results=sampled_results,
+            overall_score=score_mean,
+        )
+        result_data = {
+            "model": model.name,
+            "backend": backend,
+            "ctk": ctk or "q8_0",
+            "ctv": ctv or "q8_0",
+            "ctx": ctx_size or "auto",
+            "reasoning": effective_reasoning,
+            "mtp": mtp_enabled,
+            "runs": run_summaries,
+            "test_time_seconds": round(test_duration, 3),
+            "score": round(score_mean, 4) if score_mean is not None else None,
+            "score_mean": (
+                round(score_mean, 4) if score_mean is not None else None
+            ),
+            "score_stddev": round(score_stddev, 4),
+            "sampled_runs": len(sampled_run_scores),
+            "evaluation": summarize_evaluation(sampled_results),
+            "tests": [
+                {
+                    "name": r.name,
+                    "category": r.category,
+                    "prompt": r.prompt,
+                    "response": r.response,
+                    "ran": r.ran,
+                    "correct": r.correct,
+                    "score": r.score,
+                    "run_type": r.metadata.get("run_type", "unknown"),
+                    "seed": r.metadata.get("seed", config_item.get("seed", 42)),
+                }
+                for r in all_test_results
+            ],
+        }
+        return result_data, test_result, score_mean, score_stddev
+
+    def _run_code_tests_on_started_model(
+        self,
+        model: Any,
+        result: Any,
+        config_item: dict,
+        backend: str,
+        ctk: str | None,
+        ctv: str | None,
+        ctx_size: Any,
+        effective_reasoning: bool | None,
+        mtp_enabled: bool,
+    ) -> None:
+        if self.config.warmup > 0:
+            if not self.config.quiet:
+                console.print(f"  Warming up ({self.config.warmup} rounds)...")
+            warmup_model(
+                result.port, host=self.cfg["host"], messages=self.config.warmup
+            )
+
+        cats = (
+            self.config.categories.split(",")
+            if self.config.categories != "all"
+            else ["code", "debugging"]
+        )
+        cat_prompts = self._build_system_prompts(model, cats)
+        context_text, context_files = self._build_context_payload()
+
+        profile = result.profile
+        sampler_args = dict(profile.args) if profile is not None else None
+        reasoning_template_key = config_item.get(
+            "reasoning_template_key", "enable_thinking"
+        )
+        seed_runs = self._seed_runs_for_config(cats)
+        reasoning_template_value = config_item.get("reasoning_template_value")
+
+        all_test_results = []
+        run_summaries = []
+        host = self.cfg.get("host", "127.0.0.1")
+        test_start = time.perf_counter()
+        model_port = result.port
+
+        for i, run_cfg in enumerate(seed_runs):
+            run_seed = run_cfg["seed"]
+            run_type = run_cfg["run_type"]
+            run_categories = run_cfg["categories"]
+            run_start = time.perf_counter()
+
+            if i > 0:
+                reset_context(
+                    model_port,
+                    system_prompt=cat_prompts.get(
+                        run_categories[0], "You are a helpful assistant."
+                    ),
+                    host=host,
+                )
+                if self.config.warmup > 0:
+                    warmup_model(model_port, host=host, messages=self.config.warmup)
+
+            if not self.config.quiet:
+                console.print(f"  Running seed={run_seed} ({run_type})")
+
+            run_results, summary = self._run_single_seed_tests(
+                port=model_port,
+                run_type=run_type,
+                run_seed=run_seed,
+                run_categories=run_categories,
+                cat_prompts=cat_prompts,
+                context_text=context_text,
+                context_files=context_files,
+                sampler_args=sampler_args,
+                effective_reasoning=effective_reasoning,
+                reasoning_template_key=reasoning_template_key,
+                reasoning_template_value=reasoning_template_value,
+                max_tokens=config_item.get("max_tokens") or self.config.max_tokens or 1024,
+                run_start=run_start,
+            )
+            all_test_results.extend(run_results)
+            run_summaries.append(summary)
+
+        test_duration = time.perf_counter() - test_start
+        result_data, test_result, _, score_stddev = self._build_single_code_result_data(
+            model,
+            config_item,
+            backend,
+            ctk,
+            ctv,
+            ctx_size,
+            effective_reasoning,
+            mtp_enabled,
+            run_summaries,
+            all_test_results,
+            test_duration,
+        )
+        self.all_results.append(result_data)
+        self._save_code_results()
+
+        if not self.config.quiet:
+            score = test_result.overall_score
+            console.print(
+                f"  Score: {score:.2f} ± {score_stddev:.2f}/10"
+                if score is not None
+                else "  Score: N/A"
+            )
+            evaluation = result_data["evaluation"]
+            console.print(
+                "  Verdict: "
+                f"{evaluation['verdict']} "
+                f"(completion {evaluation['completion_rate']:.0%}, "
+                f"execution {evaluation['execution_rate']:.0%})"
+            )
+            console.print(f"  Test time: {test_duration:.2f}s")
+
     def _run_single_code_model(self, model: Any, config_item: dict) -> None:
         """Run code tests on a single model with multi-seed support."""
         # Determine backend
@@ -936,7 +1355,6 @@ class BatchRunner:
         ctx_size = config_item.get("ctx")
         turbo3 = config_item.get("turbo3", False)
         turbo4 = config_item.get("turbo4", False)
-        model_max_tokens = config_item.get("max_tokens")
         model_reasoning = config_item.get("reasoning")
         effective_reasoning = (
             model_reasoning if model_reasoning is not None else self.config.reasoning
@@ -982,8 +1400,8 @@ class BatchRunner:
                     reasoning=model_reasoning,
                     reasoning_budget=config_item.get("reasoning_budget"),
                     mtp=mtp_enabled,
-                    mtp_n_max=int(config_item.get("mtp_n_max", 3)),
-                    mtp_n_min=int(config_item.get("mtp_n_min", 0)),
+                    mtp_n_max=_optional_int(config_item.get("mtp_n_max")),
+                    mtp_n_min=_optional_int(config_item.get("mtp_n_min")),
                 )
             )
             if not self.config.quiet:
@@ -1006,358 +1424,27 @@ class BatchRunner:
                 if not self.config.quiet:
                     console.print("  OK (loaded & stopped)")
             else:
-                # Warmup model before tests
-                if self.config.warmup > 0:
-                    if not self.config.quiet:
-                        console.print(f"  Warming up ({self.config.warmup} rounds)...")
-                    warmup_model(
-                        result.port, host=self.cfg["host"], messages=self.config.warmup
-                    )
-
-                # Run tests
-                cats = (
-                    self.config.categories.split(",")
-                    if self.config.categories != "all"
-                    else ["code", "debugging"]
+                self._run_code_tests_on_started_model(
+                    model,
+                    result,
+                    config_item,
+                    backend,
+                    ctk,
+                    ctv,
+                    ctx_size,
+                    effective_reasoning,
+                    mtp_enabled,
                 )
-
-                # System prompts per category
-                cat_prompts = {}
-                if self.config.system_prompt:
-                    for cat in cats:
-                        cat_prompts[cat] = self.config.system_prompt
-                else:
-                    for cat in cats:
-                        if cat == "code":
-                            cat_prompts[cat] = get_code_system_prompt(model.name)
-                        elif cat == "debugging":
-                            cat_prompts[cat] = get_debug_system_prompt(model.name)
-                        else:
-                            cat_prompts[cat] = get_system_prompt(model.name, cat)
-
-                # Context for difficulty
-                context_text = None
-                context_files = None
-                if self.config.difficulty != "easy":
-                    diff_config = {
-                        "easy": {"wiki_tokens": 0, "code_files": []},
-                        "medium": {"wiki_tokens": 4000, "code_files": []},
-                        "hard": {
-                            "wiki_tokens": 8000,
-                            "code_files": ["tests/code/*.txt", "count: 3"],
-                        },
-                        "expert": {
-                            "wiki_tokens": 16000,
-                            "code_files": [
-                                "tests/code/*.txt",
-                                "tests/debugging/*.txt",
-                            ],
-                        },
-                    }
-                    level_cfg = diff_config.get(
-                        self.config.difficulty, diff_config["easy"]
-                    )
-
-                    # Load wiki
-                    wiki_path = Path("wikitext-2/wiki.valid.tokens")
-                    if level_cfg["wiki_tokens"] > 0 and wiki_path.exists():
-                        full = wiki_path.read_text()
-                        max_chars = level_cfg["wiki_tokens"] * 4
-                        if len(full) > max_chars:
-                            truncated = full[:max_chars]
-                            last_space = truncated.rfind(" ")
-                            if last_space > max_chars // 2:
-                                truncated = truncated[:last_space]
-                            context_text = truncated
-                        else:
-                            context_text = full
-
-                    # Load code files
-                    code_contents = []
-                    for pattern_spec in level_cfg.get("code_files", []):
-                        if pattern_spec.startswith("tests/"):
-                            parts = [p.strip() for p in pattern_spec.split(",")]
-                            glob_pattern = parts[0]
-                            count = None
-                            for part in parts[1:]:
-                                if part.startswith("count:"):
-                                    count = int(part.split(":")[1].strip())
-                                    break
-                            files = sorted(
-                                Path(glob_pattern).parent.glob(
-                                    glob_pattern.split("/")[-1]
-                                )
-                            )
-                            files = [f for f in files if f.suffix == ".txt"]
-                            if count is not None and len(files) > count:
-                                random.shuffle(files)
-                                files = files[:count]
-                            for f in files:
-                                code_contents.append(f.read_text())
-                    context_files = code_contents if code_contents else None
-
-                # Use resolved profile for sampler and capabilities
-                profile = result.profile
-                sampler = profile.sampler
-                caps = profile.capabilities
-
-                reasoning_template_key = (
-                    caps.reasoning_template_key
-                    if caps is not None and caps.reasoning_template_key
-                    else "enable_thinking"
-                )
-
-                if self.config.multi_seed:
-                    seeds = range(1, self.config.seeds + 1)
-                else:
-                    seeds = [self.config.seed]
-
-                seed_runs = [
-                    {
-                        "run_type": "family",
-                        "seed": seed,
-                        "categories": cats,
-                    }
-                    for seed in seeds
-                ]
-
-                reasoning_template_value = None
-                if effective_reasoning is not None:
-                    value_key = (
-                        "reasoning_enabled_value"
-                        if effective_reasoning
-                        else "reasoning_disabled_value"
-                    )
-                    reasoning_template_value = config_item.get(value_key)
-
-                all_test_results = []
-                run_summaries = []
-                host = self.cfg.get("host", "127.0.0.1")
-                test_start = time.perf_counter()
-                model_port = result.port
-
-                # For each seed: reset context, run tests, save (no restart)
-                for i, run_cfg in enumerate(seed_runs):
-                    run_seed = run_cfg["seed"]
-                    run_type = run_cfg["run_type"]
-                    run_categories = run_cfg["categories"]
-
-                    run_start = time.perf_counter()
-
-                    # Reset context between seeds (not first)
-                    if i > 0:
-                        reset_context(
-                            model_port,
-                            system_prompt=cat_prompts.get(
-                                run_categories[0], "You are a helpful assistant."
-                            ),
-                            host=host,
-                        )
-                        if self.config.warmup > 0:
-                            warmup_model(
-                                model_port, host=host, messages=self.config.warmup
-                            )
-
-                    if not self.config.quiet:
-                        console.print(f"  Running seed={run_seed} ({run_type})")
-
-                    try:
-                        # Run tests with profile-derived sampler and capabilities
-                        test_result = run_tests(
-                            TestRunConfig(
-                                port=model_port,
-                                categories=run_categories,
-                                system_prompt=cat_prompts,
-                                warmup_rounds=0,
-                                context_text=context_text,
-                                context_files=context_files,
-                                context_placement=self.config.placement,
-                                sampler=sampler,
-                                capabilities=caps,
-                                seed=run_seed,
-                                max_tokens=model_max_tokens
-                                or self.config.max_tokens
-                                or 1024,
-                                reasoning=effective_reasoning,
-                                reasoning_template_key=reasoning_template_key,
-                                reasoning_template_value=reasoning_template_value,
-                                max_tests_per_category=self.config.max_tests_per_category,
-                            )
-                        )
-
-                        run_results = []
-                        for r in test_result.results:
-                            r.metadata = {
-                                "run_type": run_type,
-                                "seed": run_seed,
-                                "test_time": time.perf_counter() - run_start,
-                            }
-                            run_results.append(r)
-                        all_test_results.extend(run_results)
-                        scored_results = [
-                            r.score for r in run_results if r.score is not None
-                        ]
-                        run_summaries.append(
-                            {
-                                "run_type": run_type,
-                                "seed": run_seed,
-                                "sampling": {
-                                    "temperature": sampler.temperature,
-                                    "top_p": sampler.top_p,
-                                    "top_k": sampler.top_k,
-                                    "min_p": sampler.min_p,
-                                    "presence_penalty": sampler.presence_penalty,
-                                    "repeat_penalty": sampler.repeat_penalty,
-                                },
-                                "test_time_seconds": round(
-                                    time.perf_counter() - run_start, 3
-                                ),
-                                "score": (
-                                    sum(scored_results) / len(scored_results)
-                                    if scored_results
-                                    else None
-                                ),
-                                "tests": len(run_results),
-                                "passed": sum(r.correct for r in run_results),
-                                "executed": sum(r.ran for r in run_results),
-                                "empty": sum(
-                                    not r.response.strip() for r in run_results
-                                ),
-                            }
-                        )
-
-                        # Print scores
-                        if not self.config.quiet:
-                            for r in test_result.results:
-                                label = f"{r.name} ({run_type} s{run_seed})"
-                                if r.score is None:
-                                    status = "N/A"
-                                elif r.correct:
-                                    status = f"PASS {r.score:.1f}/10"
-                                elif not r.response.strip():
-                                    status = "EMPTY 0/10"
-                                elif not r.ran:
-                                    status = f"NO-RUN {r.score:.1f}/10"
-                                else:
-                                    status = f"FAIL {r.score:.1f}/10"
-                                console.print(f"    {label}: {status}")
-                    except Exception as e:
-                        run_summaries.append(
-                            {
-                                "run_type": run_type,
-                                "seed": run_seed,
-                                "status": "failed",
-                                "error": str(e),
-                            }
-                        )
-                        if not self.config.quiet:
-                            console.print(
-                                f"    [red]Run seed={run_seed} ({run_type}) failed: {e}[/red]"
-                            )
-
-                # Aggregate result
-                from .base import TestSuiteResult
-
-                sampled_results = all_test_results
-                sampled_run_scores = [
-                    float(run["score"])
-                    for run in run_summaries
-                    if run.get("run_type") == "family" and run.get("score") is not None
-                ]
-                score_mean = (
-                    sum(sampled_run_scores) / len(sampled_run_scores)
-                    if sampled_run_scores
-                    else None
-                )
-                score_stddev = (
-                    statistics.stdev(sampled_run_scores)
-                    if len(sampled_run_scores) > 1
-                    else 0.0
-                )
-                test_result = TestSuiteResult(
-                    model_name=model.name,
-                    backend=backend,
-                    results=sampled_results,
-                    overall_score=score_mean,
-                )
-                test_duration = time.perf_counter() - test_start
-
-                result_data = {
-                    "model": model.name,
-                    "backend": backend,
-                    "ctk": ctk or "q8_0",
-                    "ctv": ctv or "q8_0",
-                    "ctx": ctx_size or "auto",
-                    "reasoning": effective_reasoning,
-                    "mtp": mtp_enabled,
-                    "runs": run_summaries,
-                    "test_time_seconds": round(test_duration, 3),
-                    "score": round(score_mean, 4) if score_mean is not None else None,
-                    "score_mean": (
-                        round(score_mean, 4) if score_mean is not None else None
-                    ),
-                    "score_stddev": round(score_stddev, 4),
-                    "sampled_runs": len(sampled_run_scores),
-                    "evaluation": summarize_evaluation(sampled_results),
-                    "tests": [
-                        {
-                            "name": r.name,
-                            "category": r.category,
-                            "prompt": r.prompt,
-                            "response": r.response,
-                            "ran": r.ran,
-                            "correct": r.correct,
-                            "score": r.score,
-                            "run_type": r.metadata.get("run_type", "unknown"),
-                            "seed": r.metadata.get("seed", config_item.get("seed", 42)),
-                        }
-                        for r in all_test_results
-                    ],
-                }
-                self.all_results.append(result_data)
-
-                self._save_code_results()
-
-                if not self.config.quiet:
-                    score = test_result.overall_score
-                    console.print(
-                        f"  Score: {score:.2f} ± {score_stddev:.2f}/10"
-                        if score is not None
-                        else "  Score: N/A"
-                    )
-                    evaluation = result_data["evaluation"]
-                    console.print(
-                        "  Verdict: "
-                        f"{evaluation['verdict']} "
-                        f"(completion {evaluation['completion_rate']:.0%}, "
-                        f"execution {evaluation['execution_rate']:.0%})"
-                    )
-                    console.print(f"  Test time: {test_duration:.2f}s")
 
         except Exception as e:
             # A single model can be unavailable (or be killed by the OS) in a
             # long batch.  Record that failure and continue to the next model
             # instead of discarding the rest of the run.
-            failure = {
-                "model": model.name,
-                "backend": backend,
-                "ctk": ctk or "q8_0",
-                "ctv": ctv or "q8_0",
-                "ctx": ctx_size or "auto",
-                "reasoning": effective_reasoning,
-                "mtp": mtp_enabled,
-                "status": "launch_failed",
-                "error": str(e),
-                "runs": [],
-                "sampled_runs": 0,
-                "score": None,
-                "score_mean": None,
-                "score_stddev": 0.0,
-                "test_time_seconds": 0.0,
-                "evaluation": summarize_evaluation([]),
-                "tests": [],
-            }
-            self.all_results.append(failure)
+            self.all_results.append(
+                self._single_code_failure_data(
+                    model, backend, ctk, ctv, ctx_size, effective_reasoning, mtp_enabled, e
+                )
+            )
             self._save_code_results()
             logger.error("Model %s could not be tested: %s", model.name, e)
             if not self.config.quiet:

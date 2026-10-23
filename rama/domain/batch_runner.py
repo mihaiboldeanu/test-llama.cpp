@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -19,13 +20,13 @@ from .batch_planner import (
     BatchPlan,
     hash_profile,
 )
-from .planner import PlannerInput, plan
+from .planner import PlanRequest, plan
 from .runner import RunnerInput, RunnerResult, run
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .models import ResolvedModelProfile
+    from .models import ResolvedProfile
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class BatchTestExecutor(Protocol):
         item: BatchItemPlan,
         port: int,
         host: str,
-        profile: ResolvedModelProfile,
+        profile: ResolvedProfile,
     ) -> dict[str, Any]: ...
 
 
@@ -76,66 +77,7 @@ class BatchExecutorInput:
     cli_override: dict | None = None
 
 
-def execute_batch(inp: BatchExecutorInput) -> list[BatchExecutorResult]:
-    """Execute a BatchPlan, returning results for each item.
 
-    Uses domain.planner + domain.runner for process lifecycle.
-    Writes manifest with resolved profiles and fixture hashes.
-    """
-    from rama.core import find_free_port
-
-    results: list[BatchExecutorResult] = []
-
-    for item in inp.plan.items:
-        if inp.dry_run:
-            result = _dry_run_item(item, inp.server_bin, inp.host)
-            results.append(result)
-            continue
-
-        port = find_free_port(None, inp.start_port)
-
-        start_time = time.perf_counter()
-        try:
-            _launch_model(item, inp.server_bin, port, inp.host)
-            test_result = inp.executor.execute(
-                item, port, inp.host, item.profile
-            )
-            duration = time.perf_counter() - start_time
-
-            results.append(
-                BatchExecutorResult(
-                    item=item,
-                    result=test_result,
-                    status="ok",
-                    duration_seconds=round(duration, 3),
-                    port=port,
-                )
-            )
-
-        except Exception as e:
-            duration = time.perf_counter() - start_time
-            logger.error("Model %s batch execution failed: %s", item.model.name, e)
-            results.append(
-                BatchExecutorResult(
-                    item=item,
-                    result={"error": str(e)},
-                    status="failed",
-                    duration_seconds=round(duration, 3),
-                    port=port,
-                )
-            )
-        finally:
-            # Best-effort cleanup
-            try:
-                _stop_model(port, item.model.name)
-            except Exception:
-                pass
-
-    # Write manifest
-    if inp.output_dir and results:
-        _write_manifest(inp.plan, results, inp.output_dir)
-
-    return results
 
 
 def _launch_model(
@@ -146,33 +88,23 @@ def _launch_model(
 ) -> RunnerResult:
     """Launch a model using planner + runner."""
     profile = item.profile
+    mtp = profile.mtp if isinstance(profile.mtp, dict) else {}
 
-    # Build PlannerInput from BatchItemPlan
-    planner_inp = PlannerInput(
-        model=item.model,
-        backend=item.backend,
-        server_bin=server_bin,
-        port=port,
-        host=host,
-        ctx_size=item.ctx_size,
-        ctk=item.ctk,
-        ctv=item.ctv,
-        sampler=profile.sampler,
-        fit_target_mib=profile.memory.fit_target_mib,
-        n_gpu_layers=profile.memory.n_gpu_layers,
-        use_mmap=profile.memory.use_mmap,
-        capabilities=profile.capabilities,
-        seed=item.seed,
-        log_disable=False,
-        mtp=item.mtp_enabled,
-        mtp_n_max=item.mtp_n_max,
-        mtp_n_min=item.mtp_n_min,
-        reasoning=item.reasoning,
-        reasoning_budget=item.reasoning_budget,
+    argv = plan(
+        PlanRequest(
+            server_bin=server_bin,
+            model=item.model,
+            profile=profile,
+            host=host,
+            port=port,
+            backend=item.backend,
+            mtp=bool(mtp.get("enabled", False)),
+        )
     )
 
-    # Plan argv (pure function)
-    argv = plan(planner_inp)
+    run_env = os.environ.copy()
+    if profile.env:
+        run_env.update({str(k): str(v) for k, v in profile.env.items()})
 
     # Execute (side effects: Popen, health check, PID file)
     return run(
@@ -182,6 +114,7 @@ def _launch_model(
             port=port,
             host=host,
             pid_dir=None,  # Use default PID dir
+            env=run_env,
         )
     )
 
@@ -200,31 +133,18 @@ def _dry_run_item(
 ) -> BatchExecutorResult:
     """Dry-run a batch item: plan argv but don't launch."""
     profile = item.profile
-
-    planner_inp = PlannerInput(
-        model=item.model,
-        backend=item.backend,
-        server_bin=server_bin,
-        port=None,  # No port for dry run
-        host=host,
-        ctx_size=item.ctx_size,
-        ctk=item.ctk,
-        ctv=item.ctv,
-        sampler=profile.sampler,
-        fit_target_mib=profile.memory.fit_target_mib,
-        n_gpu_layers=profile.memory.n_gpu_layers,
-        use_mmap=profile.memory.use_mmap,
-        capabilities=profile.capabilities,
-        seed=item.seed,
-        log_disable=False,
-        mtp=item.mtp_enabled,
-        mtp_n_max=item.mtp_n_max,
-        mtp_n_min=item.mtp_n_min,
-        reasoning=item.reasoning,
-        reasoning_budget=item.reasoning_budget,
+    mtp = profile.mtp if isinstance(profile.mtp, dict) else {}
+    argv = plan(
+        PlanRequest(
+            server_bin=server_bin,
+            model=item.model,
+            profile=profile,
+            host=host,
+            port=None,  # No port for dry run
+            backend=item.backend,
+            mtp=bool(mtp.get("enabled", False)),
+        )
     )
-
-    argv = plan(planner_inp)
 
     return BatchExecutorResult(
         item=item,
